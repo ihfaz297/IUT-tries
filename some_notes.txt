@@ -1,0 +1,68 @@
+Welcome Note from IPD
+Welcome to অলীকবচন!
+
+We're thrilled to have you here.
+
+You're exactly who this benchmark is built for.
+
+This post is your practical starting point. Read the Overview and Rules tabs first if you haven't; this is the "what to actually do next" companion to those.
+
+Start Here
+1. Read the Data tab carefully. Don't skim it. The cultural-distance bands (C0 / C1 / C2) are not decorative — they're the structure the task actually rewards understanding. But we will not be disclosing these cultural-distance bands in the dataset at this phase just to keep the focus proper. Browse a few sample-split rows in each band. You'll feel the difference between a globally-stable fact and a Bangladesh-specific one.
+
+2. Read the Rules tab. Especially Section 4 (Compute and Inference Rules) and Section 5 (External Data and Models). This is a code competition — at Phase 2, your submission runs in a Kaggle kernel with open-weight models only. Understand this constraint before you architect your solution, not after.
+
+3. Fork one of the starter notebooks.
+
+4. Come back here to ask questions. This tab is where the competition actually lives day to day.
+
+About the Two-Phase Structure
+This competition doesn't end when the Kaggle leaderboard freezes. It has two phases:
+
+Phase 1 — you submit prediction CSVs to Kaggle. Public and private leaderboards score you. The private leaderboard score is your phase 1 final score.
+Phase 2 — the top 30 teams from Phase 1 submit a runnable solution package (notebook + short paper + README). Organizers run these on a held-out fold you haven't seen. The top 15 are invited to the in-person final at Islamic University of Technology (IUT), where final rankings combine leaderboard score, presentation, paper, and novelty.
+This means: if your Phase 1 solution depends on paid APIs, you cannot advance. Build code-competition-compliant from day one.
+
+The Sample Split and Cached Judgments
+We're not releasing a large training set on purpose. This is a research competition about generalization, not about fitting to our specific examples.
+
+What we have released to make the floor fair:
+
+A labeled sample split — around 300 rows, mirroring the test distribution — for you to validate pipelines and calibrate thresholds locally.
+Cached frontier-model outputs on the sample split — pre-computed responses from GPT-4o, Claude, Gemini, and open-weight models. Feature-engineer from these freely; you don't need to burn your own API budget to build cross-lingual features for training. These are not released for the test split — that's your system's job at inference time.
+The cross-lingual pattern — model correct in English, wrong in Bengali — is the strongest single signal in this benchmark. The cached judgments make it available to every team, funded or not.
+
+About Using Your Own Models
+If your team has trained or fine-tuned its own Bengali model — a from-scratch effort, a continued-pretraining variant, a task-specific fine-tune, an unpublished research artifact — you are welcome and encouraged to use it. You are not required to publicly release the weights. The only requirement is that your model must load and run inside the offline Kaggle kernel at Phase 2 within the compute limits.
+
+If that's your situation, tell us here on the Discussion tab (in general terms — don't spoil your approach). We want to know you're coming.
+
+A Note on the Data — and How to Talk About Errors
+We are curators of Bengali knowledge, not the final authorities on it. The dataset has been verified against primary Bengali sources — Encyclopedia, the Bangladesh Bureau of Statistics, official gazette materials, Bangla Academy references, and native-speaker researcher review., literature, newspaper and more! Where we know a fact is contested or recent, it's treated as a C2 and treated accordingly.
+
+What Makes a Winning Approach
+The entry-tier path — fine-tuning existing models on the sample set — will get you on the board. Reaching the top requires more:
+
+Cross-lingual consistency checks. Translate the Bengali claim to English, verify it in a language where the model is more reliable, and use disagreement as a signal. This is not a hack — it's the phenomenon the benchmark studies.
+Retrieval grounding. Pull evidence from the provided Bengali corpus and ground the verdict. This is where medal-tier submissions separate.
+Cultural-default detection. For C1 items where the wrong answer matches a predictable global default (Nazrul → Tagore, Yunus Peace → Economics, ORS Bangladesh → Western labs), an explicit detector wins ground.
+Per-band calibration. A single decision threshold across C0 / C1 / C2 is suboptimal. Tune each band on the sample set. Feel free to generate your own data and challenge yourself!
+Teams that combine several of these — and that don't fall for the trap of a translate-then-verify pipeline alone — will do well.
+
+Discussion Etiquette
+Ask questions. Any question. There are no dumb ones. If you're stuck on setup, tokenization, GPU memory, or interpreting a rule — post it. Chances are someone else has the same question.
+Share ideas that don't give away your solution. "I noticed the sample set has X property" is fair game. "Here's my full pipeline with hyperparameters" the day before deadline is against the spirit of the competition. Use judgment.
+Speak Bangla or English. Both are welcome here. If you post in Bangla, consider adding an English summary so all participants can follow, but this is not required. This is a Bangla-language competition; the discussion can reflect that.
+Be kind. This is a research community, not a leaderboard war. Some participants are experts. Some are learning. Treat both with respect.
+Report data issues here, publicly. As above.
+Who We Are
+Institute of Policy Dynamics (IPD) — powering the competition and leading dataset curation. Brain Lab — sponsoring the competition and supporting Bengali language technology research. From government of Bangladesh. IUTCS — co-hosting the competition and hosting the Phase 2 in-person final at Islamic University of Technology. This is the second phase of Datathon from IUT!
+
+One Last Thing
+Hallucination in Bengali AI is not a niche problem. Government services in Bangladesh are deploying Bengali chatbots. Health information platforms are using Bengali LLMs. Education apps are translating textbooks into Bengali at scale. Every one of these systems is vulnerable to the exact failures this competition asks you to detect.
+
+Whatever you build here matters beyond the leaderboard. We can't wait to see it.
+
+শুভকামনা । Good luck.
+
+— The organizing team

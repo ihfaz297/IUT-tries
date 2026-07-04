@@ -1,0 +1,54 @@
+Overview
+অলীকবচন: Bengali LLM Hallucination Detection Challenge
+Datathon 2.0 | powered by the Institute of Policy Dynamics | sponsored by Brain Lab | organised by IUTCS
+
+Goal of the Competition
+Build a system that, given a Bengali prompt and a candidate response, predicts whether the response is faithful (label = 1) or hallucinated (label = 0). Some items include a supporting context passage; some do not. Your detector must handle both.
+
+The metric is binary F1 on the hallucinated class (macro F1). The competition runs in two phases: a Kaggle leaderboard phase, followed by an in-person final at Islamic University of Technology (IUT) where the top 15 teams compete on a held-out fold, present their approach, and submit a short paper. Full details are in the Rules and Evaluation tabs.
+
+Why This Competition Exists
+Bengali is spoken by over 280 million people. The large language models that increasingly mediate how Bengali speakers access information — through chatbots, search assistants, government services, health information systems, and educational tools — are remarkably fluent in Bengali. They are also, frequently, confidently wrong.
+
+A model can correctly identify the author of Bidrohi when asked in English and then attribute the poem to Rabindranath Tagore when asked in Bengali. It can describe Bangladesh's Liberation War with fluent prose and the wrong dates. It can produce a paragraph about a national monument that reads beautifully and contains a fabricated commissioning year. These failures don't sound wrong. They sound like Bengali — most of the time — which is exactly what makes them dangerous.
+
+অলীকবচন — the mirage of language — asks you to build a system that catches these mirages.
+
+What the Data Looks Like
+The benchmark spans multiple domains, three cultural-distance bands from globally-stable facts to deeply Bangladesh-specific knowledge, and four task types from closed-book question answering to translation. Some of the wrong responses are real outputs harvested from frontier and Bengali-native LLMs. Others are theory-motivated examples designed around specific failure modes documented in recent multilingual hallucination research. All of them are the kind of error a Bengali speaker actually encounters in the wild.
+
+Cultural-distance bands are the structure the task actually rewards understanding:
+
+C0 — globally stable facts (universal science, world geography, mathematics). Models should get these right in any language. Control band.
+C1 — culturally situated. The Bangladeshi answer differs from a Western or globally-dominant default, or the fact exists only in the Bangladeshi context. This is where the headline phenomenon lives.
+C2 — contested, recent, or time-sensitive facts.
+Full schema, file descriptions, and label definitions are in the Data tab.
+
+What Makes This a Research Competition
+There is no large training set in the conventional sense. A sample split with labels is released so you can validate your pipelines locally; the test set is held out and used for the public and private leaderboards. The goal is not to fine-tune on our examples. The goal is to build a detector that generalizes — one that catches hallucinations whether they came from GPT-4o, Llama, TituLLM, or a model that doesn't exist yet.
+
+Two working starter notebooks will be provided to give you the floor. Keep an eye on the competition Kaggle page!
+
+The top 5 teams by final combined score are invited to co-author the findings paper submitted to a top NLP venue. Your solution becomes evidence in the literature on how cross-lingual hallucination behaves in low-resource languages and how it can be reliably caught. That citation will outlast the medal.
+
+What Makes This a Community Competition
+Bengali language technology will not improve unless the community pushes it forward. This competition exists in that lineage. Every submission here, win or lose, becomes part of how we measure and reduce hallucination in Bengali AI systems going forward.
+
+Whether you're a Kaggle veteran, an undergraduate student attempting your first NLP competition, or an international researcher curious about what hallucination looks like outside English, this competition is built for you. If your team has trained its own Bengali model — a fine-tune, a from-scratch effort, an unpublished research artifact — you're welcome to bring it. Rules for using your own models are in the External Data and Models section of the Rules tab. But you do need to register to be able to participate!
+
+Getting Started
+Read the Data tab carefully. Browse a few sample-split rows in each cultural-distance band. The difference matters.
+Read the Rules tab, especially the Compute and Inference Rules section. This is a code competition — at Phase 2, submissions run offline in a Kaggle kernel with open-weight models only.
+Fork one of the starter notebooks and get a submission on the board.
+Use the Discussion tab. Ask questions. If something in the data looks wrong, tell us — we'll fix what we get wrong.
+Good luck. We can't wait to see what you build.
+
+— The competition organizing team
+
+The Brain Lab
+
+.png?generation=1782921498918230&alt=media)
+
+The Brain Lab under the ICT Division of the Government of Bangladesh is the exploratory, research-focused arm of the Enhancement of Bengali Language in ICT Through Research and Development (EBLICT) project. Implemented by the Bangladesh Computer Council, the lab is dedicated to strengthening the Bengali language in digital systems and building the nation's public AI and language infrastructure.Core Research DomainsThe lab’s initiatives are divided into six primary areas:Language Technologies: Developing Bengali NLP, corpora, and grammar systems to support national digital infrastructure.Speech & Multimodal Systems: Creating text-to-speech, speech-to-text, and sign language recognition tools.Accessibility & Inclusive Systems: Designing assistive communication technologies and inclusive digital interfaces.Knowledge & Cultural Systems: Digitally archiving linguistic records and preserving cultural heritage.Human-Centered AI Design: Conducting user experience research and defining ethical AI frameworks.Learning & Technical Education: Producing no-code tools, visual programming interfaces, and entry-level robotics for technical learning.Key National InitiativesAs a premier public-sector R&D unit, Brain Lab and the EBLICT project have been instrumental in launching major digital language platforms, including:Kagoj.ai: An AI-based writing and productivity platform designed for the Bangla language.
+
+Powered by Institute of Policy Dynamics
