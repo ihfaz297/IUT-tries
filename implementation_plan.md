@@ -46,9 +46,15 @@ This is the core. We heavily penalize responses that deviate from the truth.
 
 ### 4. The Aggregation Meta-Classifier (The Final Arbiter)
 Ensemble the dimensional scores into a final prediction.
-- **LightGBM Classifier:** Train a gradient boosting tree on the 299 labeled samples.
-- **Features array:** `[task_type, length_response, word_entropy, perplexity_score, nli_entailment_prob, nli_contradiction_prob, novel_char_ratio, llm_judge_binary]`
-- **Calibration:** Set different decision thresholds based on the `task_type` (e.g., lower threshold for Grammar, higher for Factual).
+- **XGBoost/LightGBM Classifier:** Train a gradient boosting tree on the 299 labeled samples (aligning with `tithy-4.ipynb`).
+- **Features array:** `[NLI_probs, Cosine_sims, token_overlap, task_type, length_response, word_entropy, perplexity_score, novel_char_ratio, deterministic_joggota, llm_judge_binary]`
+- **Calibration:** Set different decision thresholds based on the `task_type`.
+
+## Submission Merge Strategy (Next Steps)
+To prepare for our first official submission, we will merge our linguistic rules with the team's ML pipeline:
+1. **Merge Codebases:** Extract the NLI, Embedding, and XGBoost logic from `tithy-4.ipynb` and combine it with the Form Engine and Deterministic Rules from `joggota_core.py` into a unified `submission_pipeline.py`.
+2. **Feature Fusion:** The XGBoost model will train on the combined feature set, gaining semantic understanding (NLI) and strict structural verification (Entropy/Idioms).
+3. **Execution:** Run the combined pipeline locally over `dataset samples.json` to train, predict on `test set.csv`, and output a ready-to-submit `submission.csv`.
 
 ## Verification & Execution Roadmap
 
