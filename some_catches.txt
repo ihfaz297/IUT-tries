@@ -1,0 +1,48 @@
+Phase 2 Reveal + a Note on Data Resources
+Dear Teams,
+
+Thank you so much for your active participation in this journey so far. We are watching the leaderboard closely and there is an extreme fight going on! Congratulations to everyone pushing strongly already. Whatever ends up on the Phase 1 board, the work each of you is doing is genuinely moving Bengali language technology forward.
+
+First, a look ahead at Phase 2.
+
+Phase 2 preview
+We wanted to share the shape of Phase 2 now so teams can plan accordingly. Detailed Phase 2 documentation goes live after the Phase 1 leaderboard freezes; this is the strategic preview (We will also share some samples every week, to give you idea).
+
+Phase 2 will feature approximately 5,000 questions roughly twice the size of the Phase 1 test set. This scale means teams advancing to Phase 2 need to be thinking about inference-efficiency from now: your Phase 1 pipeline should be code-competition compliant (see Rules) and comfortable within the kernel budget on a test set of that size (in Kaggle).
+
+The Phase 2 questions will span a substantially broader source base than Phase 1. Coverage areas include:
+
+Common Crawl derived Bengali text
+Bengali Wikipedia and Banglapedia
+Government websites under the bangladesh.gov.bd system, with a focus area on publicly available information about different entities, Citizen Charter and Citizen Services content; this is deliberate, because civic-informational text is exactly the domain where Bengali LLM hallucination has real downstream cost
+ebanglalibrary.com
+Major Bengali newspapers (recent history, roughly the last five years)
+The bdlaws.minlaw.gov.bd corpus of Bangladeshi legislation
+NCTB (National Curriculum and Textbook Board) textbooks
+This source diversity means Phase 2 will test domain generalization, not just Phase 1's distribution. Teams that overfit to Phase 1's specific source characteristics will find Phase 2 significantly harder. Teams that build detection systems grounded in general cross-lingual reasoning, cultural-default awareness, and register-sensitivity should transfer well.
+
+On Phase 1 methodology transparency
+For those interested in the methodological grounding of part of Phase 1's data sourcing and elicitation pipeline: portions of Phase 1 follow the pipeline described in the paper "BenHalluEval: A Multi-Task Hallucination Evaluation Framework for Large Language Models on Bengali" an author of that paper is on the host list of this competition, and you are welcome to engage with the work directly in Discussion if you have methodological questions. We dont take ALL the samples from this source ofcourse, because we dont want the teams to overfit their pipeline on these samples for an easy win.
+
+We are also covering বাগধারা (idiom) cases informed by the LREC 2026 paper "When Words Don’t Mean What They Say: Figurative Understanding in Bengali Idioms." Author of this paper is also in the organizer list, so feel free to discuss here if you need insights about methodology etc! Both references reflect the design lineage of the benchmark and are provided so that motivated teams have deeper context on what the data is testing.
+
+Both papers are useful background reading and will be discussed further in the Phase 2 documentation. One disclaimer: the Phase 2 test data will containt NO samples from the datasets associated with these papers.
+
+
+
+
+Cached frontier-model outputs & the "provided Bengali corpus" — where can we find them?
+Hi organizers — thanks for a really well-designed competition!
+
+Two resources are mentioned in the official materials that we can't currently find on the Data tab:
+
+Cached frontier-model outputs. Rules 5 says: "The cached frontier-model outputs on the sample split, released with the competition data, are provided as a fair-play resource. All teams may use them freely." The Welcome Note also describes these as pre-computed responses from GPT-4o, Claude, Gemini, and open-weight models on the sample split.
+
+The Bengali corpus for retrieval. The Welcome Note ("What Makes a Winning Approach" → Retrieval grounding) says: "Pull evidence from the provided Bengali corpus."
+
+The Data tab currently shows only 3 files (dataset samples.json, test set.csv, sample submission.csv — 2.64 MB total), and none of them appear to contain either resource.
+
+Could you clarify:
+
+Will these two resources be added to the Data tab (or a linked Kaggle dataset)?
+If they're already hosted somewhere else, where should we look?

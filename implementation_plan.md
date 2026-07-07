@@ -19,7 +19,7 @@ Hallucinations are fundamentally failures of the **Joggota** axis.
 
 ### 1. Data Ingestion & Pre-processing (The Foundation)
 Cleanse the text, handle `[NULL]` contexts, and route the data.
-- **Task Classifier:** RegEx-based routing to identify Math, Vocabulary, Grammar, or Factual questions.
+- **Task Classifier:** RegEx-based routing to identify Idiom (বাগধারা), Math, Vocabulary, Grammar, or Factual questions.
 - **Context Router:** Splits pipeline into RAG (Has Context) and Open-Domain (No Context).
 
 ### 2. The Form Engine (Akangkha & Asotti Scorers)
@@ -33,11 +33,16 @@ This is the core. We heavily penalize responses that deviate from the truth.
 
 #### 3A. Contextual Joggota (For RAG / Has-Context Rows)
 - **NLI (Natural Language Inference):** Use `MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`. Compare `context` (Premise) against `response_bn` (Hypothesis). Output entails/contradicts probability.
-- **Extrinsic Entity Penalty:** Compute "Novel Character Ratio". Punish responses that introduce entities (numbers, names) not present in the context.
+- **Extrinsic Entity Penalty (SUST/BRACU NER):** Compute "Novel Character Ratio" and use local Bengali Named Entity Recognition to strictly penalize extrinsic hallucinations (e.g., inventing people/places not in context).
 
 #### 3B. Factual Joggota (For Open-Domain / No-Context Rows)
 - **Native LLM Judge:** Prompt an open-weight model (`TigerLLM-9B-IT`) to strictly evaluate the Bengali text. Force a single-token binary output (`yes`/`no` hallucinated).
+- **Cross-Lingual Consistency:** Translate Bengali claim to English (`Helsinki-NLP/opus-mt-bn-en`), verify with English model. Extremely strong for general global facts (C0), but fails on local Bangladeshi facts (C1). Used as an additional feature, not the sole arbiter.
 - **Chain-of-Thought (CoT) Math Joggota:** For math tasks, evaluate the reasoning steps (`arithmetic_slip`, `wrong_formula`), not just the final number.
+
+#### 3C. Deterministic Lexical Joggota (The Rules Engine)
+- **Idiomatic (বাগধারা) Joggota:** Flag literal interpretations of figurative language.
+- **Bangla Academy Dictionary Fallback:** Bypass LLMs for `spelling` and `vocabulary` tasks. If the response violates strict lexical rules (e.g., verbosity in a spelling task, or missing from a local dictionary), auto-flag as hallucination. Highly efficient for offline Kaggle execution.
 
 ### 4. The Aggregation Meta-Classifier (The Final Arbiter)
 Ensemble the dimensional scores into a final prediction.
