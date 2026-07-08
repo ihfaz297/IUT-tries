@@ -2,6 +2,11 @@
 Unified Joggota Submission Pipeline
 Merges tithy-4.ipynb (NLI + XGBoost) with joggota_core.py (Form Engine + Deterministic Rules)
 + TigerLLM Judge for No-Context Rows
+
+VRAM strategy:
+  Phase 1 (NLI + Embeddings) → GPU, then explicit .to("cpu") + empty_cache()
+  Phase 2 (TigerLLM-9B)      → GPU with full VRAM
+  Fallback: If TigerLLM OOMs, use BanglaBERT cross-encoder instead
 """
 import os
 import gc
@@ -33,6 +38,9 @@ NLI_MODEL_NAME = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
 # On Kaggle, change this to your offline dataset path, e.g. "/kaggle/input/tigerllm-9b-it"
 TIGERLLM_MODEL_NAME = "md-nishat-008/TigerLLM-9B-it"
 
+# Fallback: smaller Bengali LLM for no-context rows if TigerLLM OOMs
+BANGLABERT_MODEL_NAME = "csebuetnlp/banglabert_large"
+
 RANDOM_STATE = 42
 N_FOLDS = 5
 
@@ -59,7 +67,7 @@ def load_test_csv(path):
     return df
 
 # ----------------------------------------------------------------------
-# 2. MODELS (Embeddings, NLI & LLM Judge)
+# 2. MODELS (Embeddings, NLI, LLM Judge, Fallback)
 # ----------------------------------------------------------------------
 class Embedder:
     def __init__(self, model_name=EMBED_MODEL_NAME, device=None):
@@ -102,6 +110,18 @@ class NLIScorer:
             probs = torch.softmax(logits, dim=-1).cpu().numpy()
             all_probs.append(probs)
         return np.vstack(all_probs)
+
+def _force_gpu_cleanup():
+    """Aggressively clear GPU memory."""
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    # Small allocation to defragment
+    try:
+        _dummy = torch.zeros(1, device="cuda")
+        del _dummy
+    except:
+        pass
 
 class TigerLLMJudge:
     def __init__(self, model_name=TIGERLLM_MODEL_NAME):
@@ -207,6 +227,59 @@ class TigerLLMJudge:
                 
         return out
 
+
+# ----------------------------------------------------------------------
+# 2B. FALLBACK: BanglaBERT Cross-Encoder for No-Context rows
+# ----------------------------------------------------------------------
+class BanglaBERTJudge:
+    """
+    Lightweight fallback if TigerLLM can't fit in VRAM.
+    Uses BanglaBERT as a cross-encoder: prompt + response → faithfulness score.
+    BanglaBERT is ~340M params — fits easily even alongside other models.
+    """
+    def __init__(self, model_name=BANGLABERT_MODEL_NAME, device=None):
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Loading BanglaBERT judge ({model_name}) on {self.device}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, num_labels=2
+        ).to(self.device)
+        self.model.eval()
+
+    @torch.no_grad()
+    def score_no_context_rows(self, df):
+        out = np.zeros(len(df))
+        missing_mask = (df["has_context"] == 0)
+        idx_to_score = df.index[missing_mask].tolist()
+        
+        if len(idx_to_score) == 0:
+            return out
+        
+        print(f"Scoring {len(idx_to_score)} no-context rows with BanglaBERT (batch)...")
+        
+        # Process in batches
+        batch_size = 32
+        for start in range(0, len(idx_to_score), batch_size):
+            batch_idx = idx_to_score[start:start + batch_size]
+            texts = []
+            for i in batch_idx:
+                r = df.loc[i]
+                texts.append(f"{r['prompt_bn']} [SEP] {r['response_bn']}")
+            
+            inputs = self.tokenizer(
+                texts, truncation=True, padding=True, max_length=256,
+                return_tensors="pt"
+            ).to(self.device)
+            
+            logits = self.model(**inputs).logits
+            probs = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
+            
+            for idx, prob in zip(batch_idx, probs):
+                out[idx] = float(prob)
+        
+        return out
+
+
 # ----------------------------------------------------------------------
 # 3. LEXICAL HELPERS (From tithy-4)
 # ----------------------------------------------------------------------
@@ -302,7 +375,7 @@ def _log_final_distribution(preds, test_df):
     print(f"\n🎯 Final Predictions: {faithful} faithful ({faithful/total*100:.1f}%) | {hallu} hallucinated ({hallu/total*100:.1f}%)")
     print(f"   (out of {total} test rows)")
 
-def _save_run_log(train_df, test_df, feature_cols, cv_results=None):
+def _save_run_log(train_df, test_df, feature_cols, cv_results=None, used_fallback=False):
     """Append a row to run_log.csv for git-pull insights."""
     if "label" not in train_df.columns:
         return
@@ -316,13 +389,12 @@ def _save_run_log(train_df, test_df, feature_cols, cv_results=None):
         "test_rows": len(test_df),
         "test_context": int(test_df["has_context"].sum()),
         "test_no_context": int((1 - test_df["has_context"]).sum()),
+        "used_fallback": int(used_fallback),
     }
-    # Add feature means
     for col in feature_cols:
         if col in train_df.columns:
             row[f"train_{col}_mean"] = float(train_df[col].mean())
             row[f"train_{col}_std"] = float(train_df[col].std())
-    # Cross-val F1 if available
     if cv_results is not None:
         row["cv_f1_mean"] = float(np.mean(cv_results))
         row["cv_f1_std"] = float(np.std(cv_results))
@@ -363,74 +435,92 @@ def train_and_predict():
     train_df = load_json(TRAIN_PATH)
     test_df = load_test_csv(TEST_PATH)
     
-    # ---- Dataset overview ----
     _log_dataset_stats(train_df, "TRAIN SET")
     _log_dataset_stats(test_df, "TEST SET")
     
-    # --- PHASE 1: NLI & Embeddings ---
+    # --- PHASE 1: NLI & Embeddings (GPU) ---
     print("\nLoading NLI & Embedding models...")
     embedder = Embedder()
     nli_scorer = NLIScorer()
     
-    print("\n--- PHASE 1: Base Features (Form Engine + NLI + Embeddings) ---")
+    print("\n--- PHASE 1: Base Features ---")
     print("--- Processing Train Set ---")
     train_df, feature_cols = build_base_features(train_df, embedder, nli_scorer)
     
     print("\n--- Processing Test Set ---")
     test_df, _ = build_base_features(test_df, embedder, nli_scorer)
     
-    # ---- Task distribution ----
     _log_task_distribution(train_df)
     _log_task_distribution(test_df)
     
-    # Wipe GPU memory clean before LLM — explicitly move to CPU first
-    print("\nCleaning up NLI/Embedder VRAM...")
+    # Aggressive GPU cleanup
+    print("\nCleaning up Phase 1 GPU memory...")
     embedder.model.to("cpu")
     nli_scorer.model.to("cpu")
     del embedder, nli_scorer
-    gc.collect()
-    torch.cuda.empty_cache()
+    _force_gpu_cleanup()
 
-    # --- PHASE 2: LLM Judge (Only for missing context) ---
-    print("\n--- PHASE 2: TigerLLM Judge (No-Context Rows Only) ---")
+    # --- PHASE 2: LLM Judge (No-Context Rows) ---
+    used_fallback = False
+    print("\n--- PHASE 2: No-Context Row Scoring ---")
+    
+    # Try TigerLLM first
+    tiger_success = False
     try:
         tiger_judge = TigerLLMJudge()
         train_df["tigerllm_faithful_prob"] = tiger_judge.score_no_context_rows(train_df)
         test_df["tigerllm_faithful_prob"] = tiger_judge.score_no_context_rows(test_df)
         feature_cols.append("tigerllm_faithful_prob")
         
-        # Summary of TigerLLM scores
         train_llm = train_df["tigerllm_faithful_prob"]
         test_llm = test_df["tigerllm_faithful_prob"]
         print(f"\n🐯 TigerLLM Score Summary:")
         print(f"   Train: mean={train_llm.mean():.3f} | rows scored={train_llm[train_llm>0].count()}")
         print(f"   Test:  mean={test_llm.mean():.3f} | rows scored={test_llm[test_llm>0].count()}")
         
-        # Cleanup LLM
         del tiger_judge
-        gc.collect()
-        torch.cuda.empty_cache()
+        _force_gpu_cleanup()
+        tiger_success = True
     except Exception as e:
-        print(f"⚠️ Warning: Failed to run TigerLLM judge: {e}")
-        train_df["tigerllm_faithful_prob"] = 0
-        test_df["tigerllm_faithful_prob"] = 0
-        feature_cols.append("tigerllm_faithful_prob")
+        print(f"⚠️ TigerLLM failed: {e}")
+        print(f"   → Falling back to BanglaBERT judge...")
+        used_fallback = True
+        
+        # Fallback: BanglaBERT cross-encoder
+        try:
+            bangla_judge = BanglaBERTJudge()
+            train_df["tigerllm_faithful_prob"] = bangla_judge.score_no_context_rows(train_df)
+            test_df["tigerllm_faithful_prob"] = bangla_judge.score_no_context_rows(test_df)
+            feature_cols.append("tigerllm_faithful_prob")
+            
+            train_llm = train_df["tigerllm_faithful_prob"]
+            test_llm = test_df["tigerllm_faithful_prob"]
+            print(f"\n🔤 BanglaBERT Score Summary:")
+            print(f"   Train: mean={train_llm.mean():.3f} | rows scored={train_llm[train_llm>0].count()}")
+            print(f"   Test:  mean={test_llm.mean():.3f} | rows scored={test_llm[test_llm>0].count()}")
+            
+            del bangla_judge
+            _force_gpu_cleanup()
+        except Exception as e2:
+            print(f"⚠️ BanglaBERT also failed: {e2}")
+            print(f"   → Using zero signal for no-context rows")
+            train_df["tigerllm_faithful_prob"] = 0
+            test_df["tigerllm_faithful_prob"] = 0
+            feature_cols.append("tigerllm_faithful_prob")
 
     # ---- Feature summary ----
     combined = pd.concat([train_df, test_df], ignore_index=True)
     _log_feature_summary(combined, feature_cols)
 
-    # --- PHASE 3: ML Model ---
+    # --- PHASE 3: XGBoost ---
     print("\n--- PHASE 3: XGBoost Training & Cross-Validation ---")
     X_train = train_df[feature_cols].values
     y_train = train_df["label"].values
     X_test = test_df[feature_cols].values
     
-    # Cross-validation on training set
     print("\n📐 5-Fold Cross-Validation:")
     cv_scores = _cross_validate(X_train, y_train, n_folds=N_FOLDS)
     
-    # Final train on full training set
     print("\n🏋️  Training final model on full training set...")
     model = xgb.XGBClassifier(
         n_estimators=300, max_depth=3, learning_rate=0.05,
@@ -438,27 +528,26 @@ def train_and_predict():
     )
     model.fit(X_train, y_train)
     
-    # Feature importance
     importance = model.feature_importances_
     print("\n🔍 Feature Importance:")
     for col, imp in sorted(zip(feature_cols, importance), key=lambda x: -x[1]):
         print(f"   {col:30s}: {imp:.4f}")
     
-    # Predict
     print("\nPredicting on test set...")
     probs = model.predict_proba(X_test)[:, 1]
     preds = (probs >= 0.5).astype(int)
     
     _log_final_distribution(preds, test_df)
     
-    # Save submission
     submission = pd.DataFrame({"id": test_df["id"].values, "label": preds})
     submission.to_csv(SUBMISSION_OUT, index=False)
     print(f"\n✅ Saved submission → {SUBMISSION_OUT}")
     
-    # Save run log
-    _save_run_log(train_df, test_df, feature_cols, cv_scores)
-    print(f"✅ Run complete. Open {RUN_LOG_PATH} to compare across runs!")
+    _save_run_log(train_df, test_df, feature_cols, cv_scores, used_fallback)
+    
+    if used_fallback:
+        print(f"\n📌 Note: Used BanglaBERT fallback (TigerLLM couldn't fit in VRAM)")
+    print(f"✅ Run complete.")
 
 if __name__ == "__main__":
     train_and_predict()
