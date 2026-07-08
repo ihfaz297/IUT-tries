@@ -256,66 +256,206 @@ def build_base_features(df, embedder, nli_scorer):
 # ----------------------------------------------------------------------
 # 5. XGBOOST TRAINING & INFERENCE
 # ----------------------------------------------------------------------
+# ==========================================
+# 6. RUN LOGGER — tracks per-run statistics
+# ==========================================
+RUN_LOG_PATH = "run_log.csv"
+
+def _log_dataset_stats(df, name):
+    """Log basic dataset statistics."""
+    n = len(df)
+    n_ctx = df["has_context"].sum()
+    n_noctx = n - n_ctx
+    print(f"\n{'='*60}")
+    print(f"📊 {name} — {n} rows ({n_ctx} with context, {n_noctx} without)")
+    if "label" in df.columns:
+        n_faithful = df["label"].sum()
+        n_hallu = n - n_faithful
+        print(f"   Labels: {n_faithful} faithful ({n_faithful/n*100:.1f}%) | {n_hallu} hallucinated ({n_hallu/n*100:.1f}%)")
+    return n, n_ctx, n_noctx
+
+def _log_task_distribution(df):
+    """Print task type breakdown."""
+    if "task_type" not in df.columns:
+        return
+    print("\n📂 Task Distribution:")
+    for task, count in df["task_type"].value_counts().items():
+        pct = count / len(df) * 100
+        print(f"   {task:20s}: {count:4d} ({pct:.1f}%)")
+
+def _log_feature_summary(df, feature_cols):
+    """Print mean/std for each numerical feature."""
+    print("\n📈 Feature Summary (mean ± std across train+test):")
+    for col in feature_cols:
+        if col in df.columns:
+            vals = df[col].dropna()
+            mean = vals.mean()
+            std = vals.std()
+            print(f"   {col:30s}: {mean:.4f} ± {std:.4f}")
+
+def _log_final_distribution(preds, test_df):
+    """Print what the pipeline predicted."""
+    total = len(preds)
+    faithful = preds.sum()
+    hallu = total - faithful
+    print(f"\n🎯 Final Predictions: {faithful} faithful ({faithful/total*100:.1f}%) | {hallu} hallucinated ({hallu/total*100:.1f}%)")
+    print(f"   (out of {total} test rows)")
+
+def _save_run_log(train_df, test_df, feature_cols, cv_results=None):
+    """Append a row to run_log.csv for git-pull insights."""
+    if "label" not in train_df.columns:
+        return
+    row = {
+        "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "train_rows": len(train_df),
+        "train_faithful": int(train_df["label"].sum()),
+        "train_hallucinated": int((1 - train_df["label"]).sum()),
+        "train_context": int(train_df["has_context"].sum()),
+        "train_no_context": int((1 - train_df["has_context"]).sum()),
+        "test_rows": len(test_df),
+        "test_context": int(test_df["has_context"].sum()),
+        "test_no_context": int((1 - test_df["has_context"]).sum()),
+    }
+    # Add feature means
+    for col in feature_cols:
+        if col in train_df.columns:
+            row[f"train_{col}_mean"] = float(train_df[col].mean())
+            row[f"train_{col}_std"] = float(train_df[col].std())
+    # Cross-val F1 if available
+    if cv_results is not None:
+        row["cv_f1_mean"] = float(np.mean(cv_results))
+        row["cv_f1_std"] = float(np.std(cv_results))
+    
+    log_df = pd.DataFrame([row])
+    try:
+        existing = pd.read_csv(RUN_LOG_PATH)
+        log_df = pd.concat([existing, log_df], ignore_index=True)
+    except FileNotFoundError:
+        pass
+    log_df.to_csv(RUN_LOG_PATH, index=False)
+    print(f"\n📝 Run logged to {RUN_LOG_PATH}")
+
+def _cross_validate(X, y, n_folds=5):
+    """Run stratified k-fold CV and return per-fold F1 scores."""
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=RANDOM_STATE)
+    scores = []
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+        X_tr, X_val = X[train_idx], X[val_idx]
+        y_tr, y_val = y[train_idx], y[val_idx]
+        model = xgb.XGBClassifier(
+            n_estimators=300, max_depth=3, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8, random_state=RANDOM_STATE
+        )
+        model.fit(X_tr, y_tr)
+        preds = model.predict(X_val)
+        f1 = f1_score(y_val, preds)
+        scores.append(f1)
+        print(f"   Fold {fold+1}: F1 = {f1:.4f}")
+    mean_f1 = np.mean(scores)
+    std_f1 = np.std(scores)
+    print(f"   {'='*30}")
+    print(f"   CV F1: {mean_f1:.4f} ± {std_f1:.4f}")
+    return scores
+
 def train_and_predict():
     print("Loading data...")
     train_df = load_json(TRAIN_PATH)
     test_df = load_test_csv(TEST_PATH)
     
+    # ---- Dataset overview ----
+    _log_dataset_stats(train_df, "TRAIN SET")
+    _log_dataset_stats(test_df, "TEST SET")
+    
     # --- PHASE 1: NLI & Embeddings ---
-    print("Loading NLI & Embedding models...")
+    print("\nLoading NLI & Embedding models...")
     embedder = Embedder()
     nli_scorer = NLIScorer()
     
-    print("--- Processing Base Features (Train Set) ---")
+    print("\n--- PHASE 1: Base Features (Form Engine + NLI + Embeddings) ---")
+    print("--- Processing Train Set ---")
     train_df, feature_cols = build_base_features(train_df, embedder, nli_scorer)
     
-    print("--- Processing Base Features (Test Set) ---")
+    print("\n--- Processing Test Set ---")
     test_df, _ = build_base_features(test_df, embedder, nli_scorer)
     
+    # ---- Task distribution ----
+    _log_task_distribution(train_df)
+    _log_task_distribution(test_df)
+    
     # Wipe GPU memory clean before LLM
-    print("Cleaning up NLI/Embedder VRAM...")
+    print("\nCleaning up NLI/Embedder VRAM...")
     del embedder, nli_scorer
     gc.collect()
     torch.cuda.empty_cache()
 
     # --- PHASE 2: LLM Judge (Only for missing context) ---
-    print("--- Loading LLM Judge ---")
+    print("\n--- PHASE 2: TigerLLM Judge (No-Context Rows Only) ---")
     try:
         tiger_judge = TigerLLMJudge()
         train_df["tigerllm_faithful_prob"] = tiger_judge.score_no_context_rows(train_df)
         test_df["tigerllm_faithful_prob"] = tiger_judge.score_no_context_rows(test_df)
         feature_cols.append("tigerllm_faithful_prob")
         
+        # Summary of TigerLLM scores
+        train_llm = train_df["tigerllm_faithful_prob"]
+        test_llm = test_df["tigerllm_faithful_prob"]
+        print(f"\n🐯 TigerLLM Score Summary:")
+        print(f"   Train: mean={train_llm.mean():.3f} | rows scored={train_llm[train_llm>0].count()}")
+        print(f"   Test:  mean={test_llm.mean():.3f} | rows scored={test_llm[test_llm>0].count()}")
+        
         # Cleanup LLM
         del tiger_judge
         gc.collect()
         torch.cuda.empty_cache()
     except Exception as e:
-        print(f"Warning: Failed to run TigerLLM judge (Missing GPU/Memory?): {e}")
+        print(f"⚠️ Warning: Failed to run TigerLLM judge: {e}")
         train_df["tigerllm_faithful_prob"] = 0
         test_df["tigerllm_faithful_prob"] = 0
         feature_cols.append("tigerllm_faithful_prob")
 
+    # ---- Feature summary ----
+    combined = pd.concat([train_df, test_df], ignore_index=True)
+    _log_feature_summary(combined, feature_cols)
+
     # --- PHASE 3: ML Model ---
+    print("\n--- PHASE 3: XGBoost Training & Cross-Validation ---")
     X_train = train_df[feature_cols].values
     y_train = train_df["label"].values
     X_test = test_df[feature_cols].values
     
-    print("Training XGBoost...")
+    # Cross-validation on training set
+    print("\n📐 5-Fold Cross-Validation:")
+    cv_scores = _cross_validate(X_train, y_train, n_folds=N_FOLDS)
+    
+    # Final train on full training set
+    print("\n🏋️  Training final model on full training set...")
     model = xgb.XGBClassifier(
         n_estimators=300, max_depth=3, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8, random_state=RANDOM_STATE
     )
     model.fit(X_train, y_train)
     
-    print("Predicting...")
-    probs = model.predict_proba(X_test)[:, 1]
+    # Feature importance
+    importance = model.feature_importances_
+    print("\n🔍 Feature Importance:")
+    for col, imp in sorted(zip(feature_cols, importance), key=lambda x: -x[1]):
+        print(f"   {col:30s}: {imp:.4f}")
     
+    # Predict
+    print("\nPredicting on test set...")
+    probs = model.predict_proba(X_test)[:, 1]
     preds = (probs >= 0.5).astype(int)
     
+    _log_final_distribution(preds, test_df)
+    
+    # Save submission
     submission = pd.DataFrame({"id": test_df["id"].values, "label": preds})
     submission.to_csv(SUBMISSION_OUT, index=False)
-    print(f"Success! Saved {SUBMISSION_OUT}")
+    print(f"\n✅ Saved submission → {SUBMISSION_OUT}")
+    
+    # Save run log
+    _save_run_log(train_df, test_df, feature_cols, cv_scores)
+    print(f"✅ Run complete. Open {RUN_LOG_PATH} to compare across runs!")
 
 if __name__ == "__main__":
     train_and_predict()
