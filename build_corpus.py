@@ -131,7 +131,7 @@ def build_corpus():
     
     for idx, title in enumerate(PAGES_TO_FETCH):
         if idx > 0:
-            time.sleep(1.5)  # Respect Wikipedia rate limits
+            time.sleep(3)  # Respect Wikipedia rate limits (need longer delay for bn.wiki)
         text = fetch_wiki_page(title)
         if text:
             # Split by double newline to get logical paragraphs
