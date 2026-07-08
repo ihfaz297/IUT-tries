@@ -1,12 +1,12 @@
 """
 Unified Joggota Submission Pipeline
 Merges tithy-4.ipynb (NLI + XGBoost) with joggota_core.py (Form Engine + Deterministic Rules)
-+ TigerLLM Judge for No-Context Rows
++ Fine-tuned BanglaBERT-large Classifier for All Rows
 
 VRAM strategy:
   Phase 1 (NLI + Embeddings) → GPU, then explicit .to("cpu") + empty_cache()
-  Phase 2 (TigerLLM-9B)      → GPU with full VRAM
-  Fallback: If TigerLLM OOMs, use LaBSE prompt-response similarity instead
+  Phase 2 (BanglaBERT-large) → GPU, batch inference on ALL rows (context + no-context)
+  Fallback: If BanglaBERT fails, use Phase 1 sim_premise_response as proxy signal
 """
 import os
 import gc
@@ -19,7 +19,8 @@ from sklearn.metrics import f1_score, classification_report
 import xgboost as xgb
 import torch
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from torch.utils.data import Dataset, DataLoader
 
 # Import our custom Joggota rules
 from joggota_core import extract_joggota_features
@@ -120,157 +121,79 @@ def _force_gpu_cleanup():
     except:
         pass
 
-class TigerLLMJudge:
-    def __init__(self, model_name=TIGERLLM_MODEL_NAME):
-        print(f"Loading TigerLLM judge ({model_name}) in 4-bit...")
-        self.tk = AutoTokenizer.from_pretrained(model_name)
-        bnb = BitsAndBytesConfig(
-            load_in_4bit=True, 
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16, 
-            bnb_4bit_use_double_quant=True
+class PairDataset(Dataset):
+    """Minimal (premise, response) dataset for BanglaBERT cross-encoder inference."""
+    def __init__(self, premises, responses, tokenizer, max_len=384):
+        self.premises = list(premises)
+        self.responses = list(responses)
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+
+    def __len__(self):
+        return len(self.premises)
+
+    def __getitem__(self, i):
+        enc = self.tokenizer(
+            str(self.premises[i]), str(self.responses[i]),
+            truncation=True, max_length=self.max_len,
+            padding="max_length", return_tensors="pt"
         )
-        self.llm = AutoModelForCausalLM.from_pretrained(
-            model_name, quantization_config=bnb, device_map="auto"
-        ).eval()
-        self.dev = next(self.llm.parameters()).device
-        
-        def digit_ids(d):
-            ids = set()
-            for s in (d, " "+d):
-                e = self.tk.encode(s, add_special_tokens=False)
-                if e: ids.add(e[-1])
-            return list(ids)
-            
-        self.ids1 = digit_ids("1")
-        self.ids0 = digit_ids("0")
-
-    def get_category(self, prompt_text, ctx_text, response_text):
-        p_lower = str(prompt_text).lower()
-        combined_text = f"{prompt_text} {ctx_text} {response_text}"
-        
-        if re.search(r'[a-zA-Z]', combined_text):
-            return "code_mixed"
-        elif ctx_text and str(ctx_text).strip() and str(ctx_text).strip() != "[NULL]":
-            return "comprehension"
-        elif any(k in p_lower for k in ["অর্থ", "ভাবার্থ", "সমার্থক", "বিপরীত", "মানে কী"]):
-            return "vocabulary"
-        elif any(c.isdigit() for c in p_lower):
-            return "math"
-        else:
-            return "general_knowledge"
-
-    def build_sys_prompt(self, category):
-        base_rule = "কোনো ব্যাখ্যা দেবেন না। শুধুমাত্র একটি সংখ্যা আউটপুট দিন।"
-        
-        if category == "code_mixed":
-            return (f"আপনি একজন বহুভাষিক (Multilingual) এবং কোড-মিক্সড (Code-Mixed/Banglish) ডেটা বিশ্লেষক। "
-                    f"এখানে প্রশ্ন, অনুচ্ছেদ বা উত্তরে বাংলা, ইংরেজি বা বাংলিশ ভাষার মিশ্রণ থাকতে পারে। "
-                    f"ভাষার মিশ্রণ থাকা সত্ত্বেও মূল অর্থটি যাচাই করুন। প্রস্তাবিত উত্তরটি যদি সঠিক এবং প্রাসঙ্গিক হয় (Correct), তবে শুধুমাত্র '1' লিখুন। "
-                    f"উত্তরটি যদি ভুল, বানোয়াট বা অপ্রাসঙ্গিক হয় (Hallucinated), তবে শুধুমাত্র '0' লিখুন। {base_rule}")
-        elif category == "vocabulary":
-            return (f"আপনি একজন বিশেষজ্ঞ বাংলা ভাষাবিদ। আপনার কাজ হলো প্রশ্নের প্রদত্ত শব্দ বা বাগধারার অর্থ যাচাই করা। "
-                    f"প্রস্তাবিত উত্তরটি যদি শব্দ বা বাগধারার সঠিক অর্থ বা ভাবার্থ প্রকাশ করে (Correct), তবে শুধুমাত্র '1' লিখুন। "
-                    f"উত্তরটি যদি ভুল বা মনগড়া হয় (Hallucinated), তবে শুধুমাত্র '0' লিখুন। {base_rule}")
-        elif category == "math":
-            return (f"আপনি একজন গাণিতিক মূল্যায়নকারী এআই। প্রস্তাবিত গাণিতিক উত্তরটি নিখুঁত হিসাব-নিকাশ মেনে চলে কি ছুটি যাচাই করুন। "
-                    f"হিসাব ও চূড়ান্ত উত্তর সম্পূর্ণ সঠিক (Correct) হলে শুধুমাত্র '1' লিখুন। "
-                    f"হিসাবে সামান্যতম ভুল বা গরমিল (Wrong) থাকলে শুধুমাত্র '0' লিখুন। {base_rule}")
-        else: # general_knowledge, history, literature
-            return (f"আপনি একজন অত্যন্ত কঠোর তথ্য-যাচাইকারী (Fact-checker)। আপনার কাজ হলো সাধারণ জ্ঞান, বাঙালি সাহিত্য, এবং ঐতিহাসিক তথ্যের সত্যতা যাচাই করা। "
-                    f"সতর্কতা: কোনো বিখ্যাত উক্তি, বইয়ের নাম বা লেখকের নাম (যেমন হুমায়ূন আহমেদ, তসলিমা নাসরিন, রবীন্দ্রনাথ ইত্যাদি) সম্পর্কে প্রচলিত স্টেরিওটাইপ দ্বারা প্রভাবিত হবেন না। "
-                    f"প্রস্তাবিত উত্তরটি যদি বাস্তবিকভাবে সম্পূর্ণ সত্য এবং নির্ভুল হয় (Correct), তবে শুধুমাত্র '1' লিখুন। "
-                    f"উত্তরটি যদি ভুল, মিথ্যা, বানোয়াট হয় বা ভুল লেখকের নাম উল্লেখ করে (Hallucinated), তবে শুধুমাত্র '0' লিখুন। {base_rule}")
-
-    def score_no_context_rows(self, df):
-        out = np.zeros(len(df))
-        missing_mask = (df["has_context"] == 0)
-        idx_to_score = df.index[missing_mask].tolist()
-        
-        if len(idx_to_score) == 0:
-            return out
-
-        print(f"Scoring {len(idx_to_score)} no-context rows with TigerLLM...")
-        
-        for count, i in enumerate(idx_to_score):
-            r = df.loc[i]
-            ctx = r.get("context", "")
-            if pd.isna(ctx): ctx = ""
-            
-            cat = self.get_category(r["prompt_bn"], ctx, r["response_bn"])
-            SYS = self.build_sys_prompt(cat)
-            
-            u = f"QUESTION: {r['prompt_bn']}\nANSWER: {r['response_bn']}\nVerdict:"
-            
-            enc = self.tk.apply_chat_template(
-                [{"role":"system", "content":SYS}, {"role":"user", "content":u}],
-                add_generation_prompt=True, return_tensors="pt", return_dict=True
-            )
-            ii = enc["input_ids"][:, -768:].to(self.dev)
-            am = enc["attention_mask"][:, -768:].to(self.dev)
-            
-            with torch.no_grad():
-                lg = self.llm(input_ids=ii, attention_mask=am).logits[0, -1, :].float()
-            
-            p1 = torch.logsumexp(lg[self.ids1], 0)
-            p0 = torch.logsumexp(lg[self.ids0], 0)
-            
-            # Softmax to get probability of generating '1' (Faithful)
-            prob_faithful = torch.softmax(torch.stack([p0, p1]), 0)[1].item()
-            out[i] = prob_faithful
-            
-            if count % 50 == 0 and count > 0: 
-                print(f"  TigerLLM processed {count}/{len(idx_to_score)} no-context rows")
-                
-        return out
+        return {
+            "input_ids": enc["input_ids"].squeeze(0),
+            "attention_mask": enc["attention_mask"].squeeze(0),
+        }
 
 
-# ----------------------------------------------------------------------
-# 2B. FALLBACK: LaBSE-based judge for No-Context rows
-# ----------------------------------------------------------------------
-class LaBSEJudge:
+class BanglaBERTClassifier:
     """
-    Fallback if TigerLLM can't fit in VRAM.
-    Uses LaBSE embeddings to compute prompt-response similarity as
-    a faithfulness signal for no-context rows.
-    LaBSE is already downloaded and only ~470M — fits easily.
+    Fine-tuned BanglaBERT-large cross-encoder for faithfulness scoring.
+    Loads from a local checkpoint if available, otherwise from HuggingFace.
+    350M params — fits comfortably on T4 alongside other models.
     """
-    def __init__(self, model_name=EMBED_MODEL_NAME, device=None):
+    BANGLA_MODEL = "csebuetnlp/banglabert_large"
+
+    def __init__(self, checkpoint_path=None, device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Loading LaBSE judge ({model_name}) on {self.device}...")
-        self.model = SentenceTransformer(model_name, device=self.device)
+        model_path = checkpoint_path or self.BANGLA_MODEL
+        print(f"Loading BanglaBERT classifier from {model_path} on {self.device}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_path, num_labels=2, ignore_mismatched_sizes=True
+        ).half().eval().to(self.device)
 
     @torch.no_grad()
-    def score_no_context_rows(self, df):
+    def score_all_rows(self, df, batch_size=32):
+        """
+        Score ALL rows (context + no-context) in batches.
+        Uses context-or-prompt as premise, response as hypothesis.
+        Returns a numpy array of P(faithful) probabilities (0–1).
+        """
         out = np.zeros(len(df))
-        missing_mask = (df["has_context"] == 0)
-        idx_to_score = df.index[missing_mask].tolist()
-        
-        if len(idx_to_score) == 0:
-            return out
-        
-        print(f"Scoring {len(idx_to_score)} no-context rows with LaBSE (batch)...")
-        
-        # Get prompt and response texts for no-context rows
-        prompts = [df.loc[i]["prompt_bn"] for i in idx_to_score]
-        responses = [df.loc[i]["response_bn"] for i in idx_to_score]
-        
-        # Encode in batches
-        prompt_embs = self.model.encode(
-            prompts, batch_size=32, show_progress_bar=True,
-            convert_to_numpy=True, normalize_embeddings=True
-        )
-        resp_embs = self.model.encode(
-            responses, batch_size=32, show_progress_bar=True,
-            convert_to_numpy=True, normalize_embeddings=True
-        )
-        
-        # Cosine similarity
-        sims = np.sum(prompt_embs * resp_embs, axis=1)
-        
-        for idx, sim in zip(idx_to_score, sims):
-            out[idx] = float(sim)
-        
+        # Build premise: context if available, else prompt
+        premises = []
+        for _, r in df.iterrows():
+            ctx = r.get("context", "")
+            if pd.isna(ctx) or str(ctx).strip().lower() in ("[null]", "null", "none", "nan", ""):
+                premises.append(str(r["prompt_bn"]))
+            else:
+                premises.append(str(r["prompt_bn"]) + " " + str(ctx).strip())
+        responses = df["response_bn"].astype(str).tolist()
+
+        ds = PairDataset(premises, responses, self.tokenizer, max_len=384)
+        loader = DataLoader(ds, batch_size=batch_size, shuffle=False, pin_memory=True)
+
+        all_probs = []
+        for batch in loader:
+            with torch.amp.autocast("cuda", dtype=torch.float16):
+                logits = self.model(
+                    input_ids=batch["input_ids"].to(self.device),
+                    attention_mask=batch["attention_mask"].to(self.device)
+                ).logits.float()
+            probs = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
+            all_probs.append(probs)
+
+        probs = np.concatenate(all_probs)
+        out[:] = probs
         return out
 
 
@@ -454,53 +377,52 @@ def train_and_predict():
     del embedder, nli_scorer
     _force_gpu_cleanup()
 
-    # --- PHASE 2: LLM Judge (No-Context Rows) ---
+    # --- PHASE 2: BanglaBERT Classifier (All Rows) ---
     used_fallback = False
-    print("\n--- PHASE 2: No-Context Row Scoring ---")
+    print("\n--- PHASE 2: BanglaBERT Faithfulness Scoring ---")
     
-    # Try TigerLLM first
-    tiger_success = False
     try:
-        tiger_judge = TigerLLMJudge()
-        train_df["tigerllm_faithful_prob"] = tiger_judge.score_no_context_rows(train_df)
-        test_df["tigerllm_faithful_prob"] = tiger_judge.score_no_context_rows(test_df)
-        feature_cols.append("tigerllm_faithful_prob")
-        
-        train_llm = train_df["tigerllm_faithful_prob"]
-        test_llm = test_df["tigerllm_faithful_prob"]
-        print(f"\n🐯 TigerLLM Score Summary:")
-        print(f"   Train: mean={train_llm.mean():.3f} | rows scored={train_llm[train_llm>0].count()}")
-        print(f"   Test:  mean={test_llm.mean():.3f} | rows scored={test_llm[test_llm>0].count()}")
-        
-        del tiger_judge
+        # Try loading fine-tuned checkpoint first, fall back to base model
+        checkpoint = None
+        for candidate in (
+            "/kaggle/input/banglabert-finetuned-hallu",
+            "banglabert_checkpoint.pt",
+        ):
+            if os.path.exists(candidate) or os.path.isdir(candidate):
+                checkpoint = candidate
+                break
+
+        banglabert = BanglaBERTClassifier(checkpoint_path=checkpoint)
+        train_df["banglabert_faithful_prob"] = banglabert.score_all_rows(train_df, batch_size=32)
+        test_df["banglabert_faithful_prob"] = banglabert.score_all_rows(test_df, batch_size=32)
+        feature_cols.append("banglabert_faithful_prob")
+
+        train_bb = train_df["banglabert_faithful_prob"]
+        test_bb = test_df["banglabert_faithful_prob"]
+        n_train_scored = (train_bb > 0).sum()
+        n_test_scored = (test_bb > 0).sum()
+        print(f"\n🧠 BanglaBERT Score Summary:")
+        print(f"   Train: mean={train_bb.mean():.3f} | rows scored={n_train_scored}/{len(train_df)}")
+        print(f"   Test:  mean={test_bb.mean():.3f} | rows scored={n_test_scored}/{len(test_df)}")
+
+        del banglabert
         _force_gpu_cleanup()
-        tiger_success = True
     except Exception as e:
-        print(f"⚠️ TigerLLM failed: {e}")
-        print(f"   → Falling back to LaBSE-based judge...")
+        print(f"⚠️ BanglaBERT failed: {e}")
+        print(f"   → Falling back to Phase 1 sim_premise_response as proxy signal...")
         used_fallback = True
-        
-        # Fallback: LaBSE embedding similarity for no-context rows
-        try:
-            labse_judge = LaBSEJudge()
-            train_df["tigerllm_faithful_prob"] = labse_judge.score_no_context_rows(train_df)
-            test_df["tigerllm_faithful_prob"] = labse_judge.score_no_context_rows(test_df)
-            feature_cols.append("tigerllm_faithful_prob")
-            
-            train_llm = train_df["tigerllm_faithful_prob"]
-            test_llm = test_df["tigerllm_faithful_prob"]
-            print(f"\n🔤 LaBSE Score Summary:")
-            print(f"   Train: mean={train_llm.mean():.3f} | rows scored={train_llm[train_llm>0].count()}")
-            print(f"   Test:  mean={test_llm.mean():.3f} | rows scored={test_llm[test_llm>0].count()}")
-            
-            del labse_judge
-            _force_gpu_cleanup()
-        except Exception as e2:
-            print(f"⚠️ LaBSE also failed: {e2}")
-            print(f"   → Using zero signal for no-context rows")
-            train_df["tigerllm_faithful_prob"] = 0
-            test_df["tigerllm_faithful_prob"] = 0
-            feature_cols.append("tigerllm_faithful_prob")
+
+        # Use already-computed LaBSE prompt-response similarity from Phase 1
+        # (no additional model load needed)
+        train_df["banglabert_faithful_prob"] = train_df["sim_premise_response"]
+        test_df["banglabert_faithful_prob"] = test_df["sim_premise_response"]
+        feature_cols.append("banglabert_faithful_prob")
+
+        train_bb = train_df["banglabert_faithful_prob"]
+        test_bb = test_df["banglabert_faithful_prob"]
+        print(f"\n🔤 sim_premise_response fallback summary:")
+        print(f"   Train: mean={train_bb.mean():.3f}")
+        print(f"   Test:  mean={test_bb.mean():.3f}")
 
     # ---- Feature summary ----
     combined = pd.concat([train_df, test_df], ignore_index=True)
@@ -540,7 +462,7 @@ def train_and_predict():
     _save_run_log(train_df, test_df, feature_cols, cv_scores, used_fallback)
     
     if used_fallback:
-        print(f"\n📌 Note: Used LaBSE-based fallback (TigerLLM couldn't fit in VRAM)")
+        print(f"\n📌 Note: Used sim_premise_response fallback (BanglaBERT couldn't load)")
     print(f"✅ Run complete.")
 
 if __name__ == "__main__":
