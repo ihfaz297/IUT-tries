@@ -62,8 +62,9 @@ def load_test_csv(path):
 # 2. MODELS (Embeddings, NLI & LLM Judge)
 # ----------------------------------------------------------------------
 class Embedder:
-    def __init__(self, model_name=EMBED_MODEL_NAME, device=None):
-        self.model = SentenceTransformer(model_name, device=device)
+    def __init__(self, model_name=EMBED_MODEL_NAME):
+        # Run on CPU to save GPU VRAM for TigerLLM-9B
+        self.model = SentenceTransformer(model_name, device="cpu")
 
     def encode(self, texts):
         clean = []
@@ -79,8 +80,9 @@ class Embedder:
         return np.sum(a_emb * b_emb, axis=1)
 
 class NLIScorer:
-    def __init__(self, model_name=NLI_MODEL_NAME, device=None):
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    def __init__(self, model_name=NLI_MODEL_NAME):
+        # Run on CPU to save GPU VRAM for TigerLLM-9B
+        self.device = "cpu"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_name).to(self.device)
         self.model.eval()
