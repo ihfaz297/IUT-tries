@@ -31,54 +31,44 @@ MAX_LEN = 256
 WARMUP = 0.1
 
 # ---------------------------------------------------------------------------
-# 1. Load competition data
+# 1. Load combined training data (competition + BenHalluEval)
 # ---------------------------------------------------------------------------
 print("Loading data...")
-with open("dataset samples.json", "r", encoding="utf-8") as f:
-    data = json.load(f)
-train_df = pd.DataFrame(data)
 
-# Split prompt/response into premise/hypothesis pairs
-premises = []
-responses = []
-labels = []
-for _, r in train_df.iterrows():
-    ctx = r.get("context", "")
-    if pd.isna(ctx) or str(ctx).strip().lower() in ("[null]", "null", "none", "nan", ""):
-        premise = str(r["prompt_bn"])
-    else:
-        premise = str(r["prompt_bn"]) + " " + str(ctx).strip()
-    premises.append(premise)
-    responses.append(str(r["response_bn"]))
-    labels.append(int(r["label"]))
+def load_pairs_from_json(path):
+    """Load prompt/response/label pairs from a JSON file in competition format."""
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    pre, resp, lbl = [], [], []
+    for r in data:
+        ctx = r.get("context", "")
+        if pd.isna(ctx) or str(ctx).strip().lower() in ("[null]", "null", "none", "nan", ""):
+            premise = str(r["prompt_bn"])
+        else:
+            premise = str(r["prompt_bn"]) + " " + str(ctx).strip()
+        pre.append(premise)
+        resp.append(str(r["response_bn"]))
+        lbl.append(int(r["label"]))
+    return pre, resp, lbl
 
-# Generate synthetic negatives: swap faithful responses with hallucinated ones
-# This doubles the training set and adds more contrast
-pos_idx = [i for i, l in enumerate(labels) if l == 1]
-neg_idx = [i for i, l in enumerate(labels) if l == 0]
+# Load competition data (299 samples)
+premises, responses, labels = load_pairs_from_json("dataset samples.json")
 
-aug_premises = list(premises)
-aug_responses = list(responses)
-aug_labels = list(labels)
+# Load BenHalluEval data if available (~7.5K samples)
+if os.path.exists("benhallueval_training.json"):
+    bh_pre, bh_resp, bh_lbl = load_pairs_from_json("benhallueval_training.json")
+    premises.extend(bh_pre)
+    responses.extend(bh_resp)
+    labels.extend(bh_lbl)
+    print(f"  + BenHalluEval: {len(bh_pre)} pairs ({sum(bh_lbl)} faithful, {len(bh_lbl)-sum(bh_lbl)} hallucinated)")
 
-# For each positive, pair with a random hallucinated response (extrinsic hallucination)
-random.shuffle(pos_idx)
-for i, pi in enumerate(pos_idx):
-    nj = neg_idx[i % len(neg_idx)]
-    aug_premises.append(premises[pi])
-    aug_responses.append(responses[nj])
-    aug_labels.append(0)
+print(f"Total training: {len(labels)} pairs ({sum(labels)} faithful, {len(labels)-sum(labels)} hallucinated)")
 
-# For each negative, pair with a random faithful response (adds challenging negatives)
-random.shuffle(neg_idx)
-for i, ni in enumerate(neg_idx):
-    pj = pos_idx[i % len(pos_idx)]
-    aug_premises.append(premises[ni])
-    aug_responses.append(responses[pj])
-    aug_labels.append(1)
-
-print(f"Original: {len(labels)} pairs ({sum(labels)} faithful, {len(labels)-sum(labels)} hallucinated)")
-print(f"Augmented: {len(aug_labels)} pairs ({sum(aug_labels)} faithful, {len(aug_labels)-sum(aug_labels)} hallucinated)")
+# Random shuffle to mix competition + BenHalluEval data
+combined = list(zip(premises, responses, labels))
+random.shuffle(combined)
+aug_premises, aug_responses, aug_labels = zip(*combined) if combined else ([], [], [])
+aug_premises, aug_responses, aug_labels = list(aug_premises), list(aug_responses), list(aug_labels)
 
 # ---------------------------------------------------------------------------
 # 2. Dataset
