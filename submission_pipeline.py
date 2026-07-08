@@ -246,7 +246,8 @@ def build_base_features(df, embedder, nli_scorer):
 
     feature_cols = [
         "nli_ctx_entail", "nli_ctx_contra", "sim_premise_response", "token_overlap_ctx_resp", "has_context",
-        "word_entropy", "char_entropy", "novel_char_ratio", "length_ratio", "deterministic_joggota"
+        "word_entropy", "char_entropy", "novel_char_ratio", "length_ratio", "deterministic_joggota",
+        "corpus_match_score"
     ]
     df[feature_cols] = df[feature_cols].fillna(0)
     

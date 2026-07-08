@@ -1,0 +1,28 @@
+friend of mine was doing a thought experiment:
+context: one of humayun ahmed's books has "তথ্যমন্ত্রী সাহাবুদিন সাহেব বললেন, রবীন্দ্রসঙ্গীত ইসলাম এবং পাকিস্তানের ঐতিহ্যের পরিপন্থী বলে রেডিও-টেলিভিশনে রবীন্দ্রসঙ্গীত প্রচারিত হবে না। এতেই লেগে গেল ধুন্ধুমার কাণ্ড। ধরোরে, মারোরে, জ্বালাওরে, পোড়াওরে। একটা লোক একটা কথা বলেছে তাতেই এই? রবীন্দ্রসঙ্গীত এমন কী রসগোল্লা? প্যানপ্যানানি ছাড়া আর কী? তথ্যমন্ত্রী তো ভুলও বলেন নি। ইসলামি কোনো গান কি রবীন্দ্ৰনাথ লিখেছেন? তার কোনো গানে কি মা আমিনার কথা আছে? নজরুল তো অনেক হিন্দু-গান লিখলেন। শ্যামাসঙ্গীত। রবীন্দ্রনাথ দুএকটা ইসলামি গান তো লিখতেও পারতেন। যে গান লিখতে পারে, সে হিন্দু গান মুসলমান গান সবই লিখতে পারে। লিখলেন না কেন? দাড়ি রাখার সময় তো এক হাত লম্বা দাড়ি রেখে ফেললেন। কুর্তা যেটা পরেন। সেটাও তো ইসলামি কুর্তা। তিনি যদি দুএকটা ইসলামি গান লিখতেন, তাহলে এই সমস্যা হতো না।"
+query: why didn't rabindranath write islamic song
+claude sonnet: "This passage is satire — it reads like Taslima Nasrin's writing, mimicking the voice of communal bigotry to expose how absurd it is, not making a genuine argument.
+
+**The historical event it references:** In 1967, Pakistan's Information Minister Khwaja Shahabuddin declared Rabindra Sangeet (Tagore's songs) un-Islamic and against Pakistani culture, and banned it from state radio and TV. This triggered massive protests in East Pakistan — it became one of many flashpoints of Bengali cultural resistance to West Pakistani domination, feeding into the movement that eventually led to Bangladesh's independence in 1971.
+
+**Why the "logic" in the passage is deliberately absurd, not a real argument:**
+
+The clearest rebuttal is this: **"Amar Sonar Bangla," a Tagore song, is the national anthem of Bangladesh** — a Muslim-majority nation born partly *from* resistance to exactly this kind of "Tagore is anti-Islamic" rhetoric. If his songs were genuinely hostile to Islam or Muslim identity, that would be a strange choice for a national anthem.
+
+**The real answer to why Tagore didn't write "Islamic" songs:**
+
+- He came from a Bengali Brahmo Samaj Hindu background, but his songs draw more from Baul mysticism, Vaishnava poetry, and Upanishadic universalism than from any organized religious doctrine — including orthodox Hinduism itself. He wasn't writing religious anthems for any single faith.
+- His themes are nature, love, longing, patriotism, and a kind of personal spiritual humanism — not devotional content tied to any one religion's specific figures or rituals.
+- Nazrul is a fair contrast, but for a different reason: he deliberately wrote across traditions (hamd/naat *and* Shyama Sangeet) as part of his own personal commitment to Hindu-Muslim unity. That was his individual project, not an obligation every writer owes.
+
+The demand that an artist prove religious loyalty by writing in every faith's idiom — or else be banned — is the actual object of ridicule in the passage. The narrator's sarcastic "he should have grown a beard and wore an Islamic kurta" line is mocking exactly that demand, not endorsing it."
+
+remark: "[15:12, 07/07/2026] Alvee Ahnaf: detect korte parena
+[15:12, 07/07/2026] Alvee Ahnaf: eida
+[15:12, 07/07/2026] Alvee Ahnaf: humayun ahmeed r
+[15:12, 07/07/2026] Alvee Ahnaf: taslima nasrin r vabse"
+fable: "Interesting passage — this echoes the 1967 controversy when Pakistan's Information Minister Khwaja Shahabuddin banned Rabindra Sangeet from radio and TV, calling it against Pakistani ideology. The narrator's rant is clearly ironic.
+
+As for the actual question: Rabindranath didn't really write "Hindu songs" either, in the sectarian sense. His devotional songs (the Puja porjay) address a formless, universal divine — shaped by his Brahmo Samaj upbringing, which rejected idol worship and ritualism. You'll find almost no songs invoking Kali, Krishna, or specific deities, just as there are none about Ma Amina. His spiritual idiom simply wasn't organized around any organized religion's iconography.
+
+That said, Islamic and Persian influences run deep in his work. He grew up hearing his father Debendranath recite Hafiz of Shiraz, drew heavily on Baul and Sufi traditions (he championed Lalon Fakir's songs), and was honored in Iran as a spiritual heir of Hafiz. Nazrul's project was different — he consciously wrote both Islamic ghazals and Shyama Sangeet as a statement of Hindu-Muslim unity. Tagore's universalism took the opposite route: instead of writing for every religion, he wrote for none in particular. Ironically, that's exactly what made his songs feel "un-Islamic" to the Pakistani establishment — and impossible to ban from Bengali hearts."
