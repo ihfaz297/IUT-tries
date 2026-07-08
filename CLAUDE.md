@@ -22,16 +22,10 @@ The pipeline is implemented in `submission_pipeline.py` and runs in **3 sequenti
 - **Joggota Engine** (`joggota_core.py`): Deterministic rule-based features (entropy, length ratio, novel char ratio, task classification, idiom detection, corpus grounding).
 - After features are extracted, **both models are deleted and GPU memory is flushed** (`gc.collect()` + `torch.cuda.empty_cache()`).
 
-### Phase 1.5 — VRAM Flush
-Critical step. Without this, loading the 9B model causes OOM.
-
-### Phase 2 — TigerLLM Judge (no-context rows only)
-- **TigerLLM-9B-it** (`md-nishat-008/TigerLLM-9B-it`): Loaded in **4-bit quantization** (`BitsAndBytesConfig`).
-- Only processes rows where `has_context == 0`.
-- Dynamically categorizes each prompt into `code_mixed`, `vocabulary`, `math`, or `general_knowledge`.
-- Uses category-specific Bengali system prompts with anti-stereotype guardrails.
-- Extracts logit probability of generating `'1'` (Faithful) vs `'0'` (Hallucinated).
-- After scoring, model is deleted and GPU flushed again.
+### Phase 2 — Feature Signal (no LLM judge)
+- **NO TigerLLM**: Attempted 4-bit quantization on Kaggle T4 — OOM errors. The 9B model needs ~8GB at 4-bit and T4 has 16GB but with tokenizer overhead + VRAM fragmentation, it breaks. This is a dead end on current hardware.
+- **NO BanglaBERT**: Attempted as a fallback — fine-tuned on 2.5K BenHalluEval QA pairs + 299 competition samples. CV F1 showed 0.823 but actual leaderboard score dropped to 0.602. The model learned a cheap shortcut (detecting non-Bengali tokens in BenHalluEval's gibberish hallucinated samples) rather than real faithfulness discrimination. Made things worse, not better.
+- **Current fallback**: Uses `sim_premise_response` (LaBSE cosine similarity) as the proxy faithfulness signal in place of the failed LLM judge.
 
 ### Phase 3 — XGBoost Fusion
 - **XGBoost** (`max_depth=3`, `n_estimators=300`): Shallow ensemble to prevent overfitting on 299-sample training set.
@@ -45,7 +39,7 @@ Critical step. Without this, loading the 9B model causes OOM.
   - `length_ratio` — Response vs prompt length
   - `deterministic_joggota` — Rule-based verdict
   - `corpus_match_score` — Offline corpus retrieval grounding
-  - `tigerllm_faithful_prob` — LLM judge probability
+  - `banglabert_faithful_prob` — Currently filled with `sim_premise_response` (proxy fallback)
 
 ## File Map
 
@@ -57,6 +51,9 @@ Critical step. Without this, loading the 9B model causes OOM.
 | `offline_corpus.json` | ~242 paragraphs from Bengali Wikipedia (Constitution, history, literature, etc.) |
 | `converter.py` | Converts `submission_pipeline.py` → `submission_kaggle.ipynb` |
 | `submission_kaggle.ipynb` | Auto-generated Kaggle-ready notebook |
+| `train_banglabert.py` | ❌ Failed BanglaBERT fine-tuning script (do not use — makes scores worse) |
+| `augment_from_benhallueval.py` | ❌ Failed data augmentation — extracts noisy training pairs from BenHalluEval |
+| `benhallueval_training.json` | ❌ Noisy QA pairs — 5K hallucinated, 2.5K faithful (caused the 0.823→0.602 drop) |
 | `dataset samples.json` | 299 labeled examples — the only supervised signal |
 | `test set.csv` | 2,516 rows, no labels — submit predictions for these |
 | `sample submission.csv` | Format: `id,label` |
@@ -65,6 +62,11 @@ Critical step. Without this, loading the 9B model causes OOM.
 | `some_catches.txt` | Phase 2 preview — source domains, corpus question, methodology refs |
 | `LEGAL_DOCS.txt` | Full competition rules |
 | `freelance.txt` | Example of cultural stereotype hallucination (Humayun Ahmed vs Taslima Nasrin) |
+| `check_noise.py` | Diagnostic: spot-checks BenHalluEval training data quality |
+| `check_submission.py` | Diagnostic: compares submission distributions across runs |
+| `diagnose.py` | Diagnostic: analyzes CV F1 vs actual score gap |
+| `run_log.csv` | Previous run log (CV F1 0.646, TigerLLM fallback) |
+| `run_log (1).csv` | Failed run log (CV F1 0.823, BanglaBERT — actual score 0.602) |
 
 ## Joggota Engine (`joggota_core.py`)
 
@@ -88,34 +90,61 @@ Routes prompts into: `idiom`, `vocabulary`, `spelling`, `math`, `translation`, `
 - For each row: retrieves best-matching corpus paragraph for the prompt, then checks word overlap between the response and retrieved evidence.
 - Produces `corpus_match_score` (0–1, higher = better grounded).
 
-## Offline Corpus (`offline_corpus.json`)
+## Leaderboard Status
 
-Built by `build_corpus.py` from Bengali Wikipedia API. Currently covers:
-- **Constitution & Law**: বাংলাদেশের সংবিধান, ডিজিটাল নিরাপত্তা আইন, সুপ্রিম কোর্ট, জাতীয় সংসদ
-- **Liberation War & History**: স্বাধীনতা যুদ্ধ, মুক্তিযুদ্ধ, ভাষা আন্দোলন
-- **Literature**: রবীন্দ্রনাথ, নজরুল, হুমায়ূন আহমেদ, জীবনানন্দ, মধুসূদন, বঙ্কিম, বিদ্যাসাগর, শরৎচন্দ্র, সুকান্ত, তসলিমা নাসরিন
-- **Geography & Civics**: বাংলাদেশের অর্থনীতি, কক্সবাজার, চট্টগ্রাম, ঢাকা, পদ্মা সেতু, সুন্দরবন
-- **Science**: পদার্থবিজ্ঞান, রসায়ন, জীববিজ্ঞান, গণিত, জগদীশ চন্দ্র বসু, সত্যেন্দ্রনাথ বসু
+- **Current Phase 1 score**: 0.602 F1 (tanked from 0.636 after BanglaBERT experiment)
+- **Previous best score**: 0.636 F1 (Phase 1 features + joggota, no LLM judge)
+- **Primary bottleneck**: No-context rows have weak signal. LLM judge was the intended fix but can't fit on available hardware.
+- **Test set distribution**: 54% with context, 46% without. Context-aware features are our best lever.
 
-> **Note**: Some pages hit Wikipedia's rate limit (429). Re-running `build_corpus.py` with the built-in 1.5s delay fills more pages each time. Target: ~70+ pages, ~500+ paragraphs.
+## What Actually Happened
 
-## TigerLLM Judge Design
+### TigerLLM-9B OOM
+Kaggle T4 (16GB) could not fit TigerLLM-9B even at 4-bit quantization. The model loads at ~5.5GB but with tokenizer buffers, CUDA context, and VRAM fragmentation, it consistently OOMed. This killed the LLM judge approach.
 
-### Category-Specific Prompts (Bengali)
-Each prompt category gets a tailored system prompt to maximize detection accuracy:
-- **code_mixed**: Handles Bangla-English混合 text without penalizing language mixing
-- **vocabulary**: Checks for correct শব্দ/বাগধারার অর্থ
-- **math**: Verifies exact numerical correctness
-- **general_knowledge**: Strict fact-checker with **anti-stereotype guardrail** — explicitly warns TigerLLM not to be influenced by author/book name stereotypes (e.g., confusing Humayun Ahmed's writing with Taslima Nasrin's)
+### BanglaBERT Failure (CV 0.823 → Actual 0.602)
+Attempted as a GPU-free fallback. Fine-tuned locally on CPU using 7.5K pairs extracted from BenHalluEval:
+- 5,018 hallucinated (label=0): mostly gibberish, non-Bengali tokens, obvious nonsense
+- 2,509 faithful (label=1): 90% clean but 10% mislabeled
 
-### Logit Extraction (not free-generation)
-We do NOT generate text from TigerLLM. Instead:
-1. Build the prompt with `apply_chat_template`.
-2. Run a single forward pass.
-3. Extract logits for token IDs of `'0'` and `'1'`.
-4. Apply softmax to get `P(faithful)` as a continuous feature for XGBoost.
+**Why it failed**: The BenHalluEval hallucinated samples were TOO easy. They contained English tokens, mixed scripts, and obvious non-answers. BanglaBERT learned to detect "non-Bengali token" as its primary signal — not actual faithfulness. On the diverse competition test set (summarization, reasoning, code-mixed), this shortcut failed catastrophically. CV F1 of 0.823 was a mirage because the 299 training samples came from the same easy-QA distribution.
 
-This is much faster than generating text and prevents the model from rambling.
+### Why the Original Notebook's BanglaBERT Worked
+The `banglabert-train-m.ipynb` (competition authors) used:
+- **81K training pairs** from HuggingFace (30× more data)
+- **Qwen 32B judge** to generate hard pseudo-labeled negatives
+- **2-seed bagging** (two independent runs, averaged)
+- **NLI + SQuAD + IndicQA + BanglaRQA** as additional training sources
+
+We had none of this. Training on only 2.5K easy BenHalluEval pairs taught the model a cheap surface pattern, not real discrimination.
+
+## Next Steps: Recovery Plan
+
+### Phase 1: Revert BanglaBERT Damage ✅ (already diagnosed)
+Current `submission_pipeline.py` already uses `sim_premise_response` fallback when BanglaBERT checkpoint is missing. Confirm no stale checkpoint exists.
+
+### Phase 2: Better Context-Aware Features (highest ROI)
+The current `nli_ctx_entail` does `context.fillna(prompt)` — this dilutes the signal for the 54% of rows that DO have context. Fix:
+- **Separate NLI paths**: For context rows, run NLI(response, context) to check factual grounding. For no-context rows, keep the existing prompt-based approach.
+- **TF-IDF context-response overlap**: Direct word overlap between response and context paragraph — more precise than LaBSE for fact-checking against a source.
+- **Context containment**: Does the response text appear verbatim (or near-verbatim) in the context? If yes → high confidence faithful.
+
+### Phase 3: Response Quality Heuristics
+- `resp_is_refusal`: contains phrases like "আমি জানি না", "দুঃখিত", "ক্ষমা করবেন"
+- `resp_has_code_switch`: ratio of non-Bengali words to total words
+- `resp_repetition_score`: n-gram repetition within the response
+- `resp_is_question`: response ends with ? (deflection pattern)
+
+### Phase 4: Better XGBoost Configuration
+Current `max_depth=3, n_estimators=300` is very conservative. Try:
+- `max_depth=5`, `n_estimators=500` with early stopping on 20% validation
+- Per-band threshold calibration (context vs no-context, task type)
+
+### Phase 5: Simple Data Augmentation (no model needed)
+For the 299 training samples:
+- Synonym substitution using a Bengali synonym list
+- Slight word-order shuffling (creates varied surface forms)
+- This doubles the training set to ~600 without needing a judge model
 
 ## Key Constraints (from `LEGAL_DOCS.txt` & `some_catches.txt`)
 
@@ -133,34 +162,12 @@ This is much faster than generating text and prevents the model from rambling.
   - NCTB textbooks
 - **Methodology papers**: BenHalluEval + LREC 2026 idiom paper — Phase 2 test data contains NO samples from these datasets
 
-## Current Status & Known Gaps
-
-### ✅ Implemented
-- Full 3-phase pipeline with VRAM management
-- TigerLLM-9B 4-bit judge with category-specific Bengali prompts
-- Joggota deterministic rules (spelling, math, idioms)
-- Offline corpus retriever (TF-IDF mini-RAG from Bengali Wikipedia)
-- Auto-converter to Kaggle notebook format
-- GitHub push workflow
-
-### ⚠️ Gaps / TODO
-- **Corpus coverage**: Wikipedia rate-limiting means ~30 pages still missing. Need to re-run `build_corpus.py` or split into smaller batches.
-- **Cross-lingual consistency**: Not yet implemented. Translate Bengali → English, verify with English model, use disagreement as feature.
-- **bdlaws.minlaw.gov.bd**: Legislative text is NOT in the corpus yet (it's not on Wikipedia). Need a dedicated scraper or manual entry.
-- **Cached frontier-model outputs**: Organizers promised GPT-4o/Claude/Gemini responses on the sample split but haven't released them yet.
-- **Per-band threshold calibration**: XGBoost currently uses a single 0.5 threshold. Should tune per task type.
-- **CV validation**: Need to run 5-fold CV on the 299-sample training set to measure actual F1 improvement from TigerLLM + corpus features.
-
-## Leaderboard Status
-
-- **Current Phase 1 score**: 0.636 F1 (136th place)
-- **Primary cause**: Pipeline had zero signal for no-context rows. TigerLLM integration + corpus grounding should significantly improve this.
-
 ## Models Used (all open-weight, Phase 2 compliant)
 
-| Model | Size | Role | Quantization |
+| Model | Size | Role | Status |
 |---|---|---|---|
-| mDeBERTa-v3-base-mnli-xnli | ~280M | NLI entailment/contradiction | None (FP32) |
-| LaBSE | ~470M | Sentence embeddings + cosine sim | None (FP32) |
-| TigerLLM-9B-it | 9B | LLM-as-a-Judge for no-context rows | 4-bit NF4 |
-| XGBoost | — | Meta-classifier / feature fusion | N/A |
+| mDeBERTa-v3-base-mnli-xnli | ~280M | NLI entailment/contradiction | ✅ Working |
+| LaBSE | ~470M | Sentence embeddings + cosine sim | ✅ Working |
+| TigerLLM-9B-it | 9B | LLM-as-a-Judge | ❌ OOM on T4 |
+| BanglaBERT-large | 350M | Cross-encoder classifier | ❌ Made scores worse (0.602) |
+| XGBoost | — | Meta-classifier / feature fusion | ✅ Working |
