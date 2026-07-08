@@ -79,8 +79,28 @@ def deterministic_lexical_joggota(prompt: str, response: str, task_type: str) ->
             
     if task_type == "idiom":
         # Idioms require figurative meaning, not literal.
-        # TODO: Hook in a lookup dictionary to penalize literal translations.
-        pass
+        COMMON_IDIOMS = {
+            "অকাল কুষ্মাণ্ড": {"literal": ["কুমড়া", "সবজি", "ফল"], "figurative": ["অপদার্থ", "অযোগ্য", "বাজে", "অকাজের"]},
+            "আকাশ কুসুম": {"literal": ["আকাশ", "ফুল"], "figurative": ["অসম্ভব", "কল্পনা", "অবাস্তব", "মিথ্যা"]},
+            "ঘোড়ার ডিম": {"literal": ["ঘোড়া", "ডিম", "অশ্ব"], "figurative": ["অসম্ভব", "অবাস্তব", "কিছুই না", "অস্তিত্বহীন"]},
+            "গাছে কাঁঠাল গোঁফে তেল": {"literal": ["গাছ", "কাঁঠাল", "গোঁফ", "তেল"], "figurative": ["আগে", "প্রস্তুতি", "পাওয়ার", "আশায়"]},
+            "চোখে সর্ষে ফুল দেখা": {"literal": ["সর্ষে", "ফুল", "চোখ"], "figurative": ["বিপদ", "দিশেহারা", "ঘোরগ্রস্ত", "অন্ধকার"]},
+            "হাতের পাঁচ": {"literal": ["হাত", "পাঁচ", "আঙুল"], "figurative": ["সম্বল", "উপায়", "শেষ", "একমাত্র"]},
+            "অন্ধের যষ্টি": {"literal": ["অন্ধ", "লাঠি", "যষ্টি"], "figurative": ["অবলম্বন", "একমাত্র", "ভরসা"]},
+            "আদা জল খেয়ে লাগা": {"literal": ["আদা", "জল", "পানি"], "figurative": ["উৎসাহে", "চেষ্টা", "প্রাণপণ", "উঠেপড়ে"]},
+            "আঙ্গুল ফুলে কলাগাছ": {"literal": ["আঙ্গুল", "কলাগাছ", "গাছ"], "figurative": ["বড়লোক", "উন্নতি", "ধনী", "হঠাৎ"]}
+        }
+        
+        for idiom, keywords in COMMON_IDIOMS.items():
+            if idiom in prompt_clean:
+                # Check if the LLM took it literally
+                has_literal = any(word in resp_clean for word in keywords["literal"])
+                has_figurative = any(word in resp_clean for word in keywords["figurative"])
+                
+                if has_literal and not has_figurative:
+                    return 0.0 # Absolute hallucination
+                elif has_figurative:
+                    return 1.0 # Passed deterministic check
             
     # For vocabulary, we would ideally hook in the local dictionary check here.
     # For now, we abstain if no strict rule was triggered.
