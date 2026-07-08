@@ -385,8 +385,10 @@ def train_and_predict():
         # Require a fine-tuned checkpoint — base model has a random head
         checkpoint = None
         for candidate in (
-            "/kaggle/input/banglabert-finetuned-hallu",
-            "banglabert_checkpoint.pt",
+            "/kaggle/working/banglabert_finetuned",          # Auto-trained by notebook Part 2
+            "/kaggle/input/banglabert-finetuned-hallu",      # Pre-attached Kaggle dataset
+            "banglabert_finetuned",                          # Local training output
+            "banglabert_checkpoint.pt",                      # Legacy checkpoint
         ):
             if os.path.isdir(candidate) or (os.path.isfile(candidate) and candidate.endswith(".pt")):
                 checkpoint = candidate
