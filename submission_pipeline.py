@@ -382,15 +382,23 @@ def train_and_predict():
     print("\n--- PHASE 2: BanglaBERT Faithfulness Scoring ---")
     
     try:
-        # Try loading fine-tuned checkpoint first, fall back to base model
+        # Require a fine-tuned checkpoint — base model has a random head
         checkpoint = None
         for candidate in (
             "/kaggle/input/banglabert-finetuned-hallu",
             "banglabert_checkpoint.pt",
         ):
-            if os.path.exists(candidate) or os.path.isdir(candidate):
+            if os.path.isdir(candidate) or (os.path.isfile(candidate) and candidate.endswith(".pt")):
                 checkpoint = candidate
                 break
+
+        if checkpoint is None:
+            raise FileNotFoundError(
+                "No fine-tuned BanglaBERT checkpoint found. "
+                "Skipping to sim_premise_response fallback — "
+                "base banglabert_large has a random classification head "
+                "and would inject noise into XGBoost."
+            )
 
         banglabert = BanglaBERTClassifier(checkpoint_path=checkpoint)
         train_df["banglabert_faithful_prob"] = banglabert.score_all_rows(train_df, batch_size=32)

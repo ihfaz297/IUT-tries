@@ -28,11 +28,11 @@ notebook = {
             "cell_type": "markdown",
             "metadata": {},
             "source": [
-                "# অলীকবচন — Joggota + TigerLLM Pipeline\n",
+                "# অলীকবচন — Joggota + BanglaBERT Pipeline\n",
                 "**Self-contained notebook.** No external `.py` files needed.\n\n",
                 "### Setup Checklist:\n",
-                "1. GPU: **T4 x2**\n",
-                "2. Attach TigerLLM-9B weights as a Kaggle Dataset → update `TIGERLLM_MODEL_NAME` below\n",
+                "1. GPU: **T4 x2** or **P100**\n",
+                "2. Attach fine-tuned BanglaBERT-large weights as a Kaggle Dataset → path: `/kaggle/input/banglabert-finetuned-hallu`\n",
                 "3. Attach mDeBERTa weights as a Kaggle Dataset → update `NLI_MODEL_NAME` below\n", 
                 "4. Attach LaBSE weights as a Kaggle Dataset → update `EMBED_MODEL_NAME` below\n",
                 "5. Upload `offline_corpus.json` alongside this notebook (or as a Dataset)\n",
@@ -46,7 +46,7 @@ notebook = {
             "metadata": {},
             "outputs": [],
             "source": [
-                "!pip install -q bitsandbytes accelerate sentence-transformers xgboost\n"
+                "!pip install -q accelerate sentence-transformers xgboost\n"
             ]
         },
         {
@@ -67,7 +67,7 @@ notebook = {
             "cell_type": "markdown",
             "metadata": {},
             "source": [
-                "## Part 2: Submission Pipeline (NLI + TigerLLM + XGBoost)"
+                "## Part 2: Submission Pipeline (NLI + BanglaBERT + XGBoost)"
             ]
         },
         {
