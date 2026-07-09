@@ -4,8 +4,11 @@ self-contained Kaggle notebook. No external .py imports needed.
 
 Usage:
   python converter.py
+
+Output: submission_kaggle.ipynb
 """
 import json
+import re
 
 # Read both source files (normalize line endings for Windows compat)
 with open("joggota_core.py", "r", encoding="utf-8") as f:
@@ -14,12 +17,11 @@ with open("joggota_core.py", "r", encoding="utf-8") as f:
 with open("submission_pipeline.py", "r", encoding="utf-8") as f:
     pipeline_code = f.read().replace("\r\n", "\n")
 
-# Remove the import line from pipeline since we're inlining joggota_core
+# Inline the joggota_core import — replace the import line with a comment
+# and prepend the joggota_core source to the pipeline code
 pipeline_code = pipeline_code.replace(
-    "from joggota_core import extract_joggota_features\n", ""
-)
-pipeline_code = pipeline_code.replace(
-    "from joggota_core import extract_joggota_features", ""
+    "from joggota_core import extract_joggota_features\n",
+    "# [joggota_core.py inlined below]\n",
 )
 
 notebook = {
@@ -28,17 +30,20 @@ notebook = {
             "cell_type": "markdown",
             "metadata": {},
             "source": [
-                "# অলীকবচন — Joggota + BanglaBERT Pipeline\n",
-                "**Self-contained notebook.** No external `.py` files needed.\n\n",
-                "### Setup Checklist:\n",
-                "1. GPU: **T4 x2** or **P100**\n",
-                "2. Attach fine-tuned BanglaBERT-large weights as a Kaggle Dataset → path: `/kaggle/input/banglabert-finetuned-hallu`\n",
-                "3. Attach mDeBERTa weights as a Kaggle Dataset → update `NLI_MODEL_NAME` below\n", 
-                "4. Attach LaBSE weights as a Kaggle Dataset → update `EMBED_MODEL_NAME` below\n",
-                "5. Upload `offline_corpus.json` alongside this notebook (or as a Dataset)\n",
-                "6. Upload `dataset samples.json` and `test set.csv`\n",
-                "7. For Phase 2: toggle **Internet OFF** before running"
-            ]
+                "# অলীকবচন — Joggota + Small LLM Judge Pipeline\n",
+                "**Self-contained Kaggle notebook** for Datathon 2.0 Phase 1 & 2.\n\n",
+                "### Architecture\n",
+                "- **Phase 1**: mDeBERTa-v3 NLI + LaBSE embeddings + Joggota deterministic rules\n",
+                "- **Phase 2**: Qwen2.5-1.5B-Instruct LLM Judge (no-context rows only)\n",
+                "- **Phase 3**: XGBoost fusion (14 features → binary prediction)\n\n",
+                "### Kaggle Setup Checklist:\n",
+                "1. GPU: **T4 x2** or **P100** (16 GB VRAM minimum)\n",
+                "2. Upload `dataset samples.json` and `test set.csv`\n",
+                "3. Upload `offline_corpus.json` alongside this notebook\n",
+                "4. For LLM Judge: upload Qwen2.5-1.5B-Instruct as a Kaggle Dataset → `/kaggle/input/qwen2.5-1.5b-instruct`\n",
+                "   - OR download during Phase 1 via `download_models.py` before uploading\n",
+                "5. For Phase 2: toggle **Internet OFF** before running (all models must be offline)"
+            ],
         },
         {
             "cell_type": "code",
@@ -47,154 +52,55 @@ notebook = {
             "outputs": [],
             "source": [
                 "!pip install -q accelerate sentence-transformers xgboost\n"
-            ]
+            ],
         },
         {
             "cell_type": "markdown",
             "metadata": {},
             "source": [
                 "## Part 1: Joggota Engine (Deterministic Rules + Mini-RAG)"
-            ]
+            ],
         },
         {
             "cell_type": "code",
             "execution_count": None,
             "metadata": {},
             "outputs": [],
-            "source": [line + "\n" for line in joggota_code.split("\n")]
+            "source": [line + "\n" for line in joggota_code.split("\n")],
         },
         {
             "cell_type": "markdown",
             "metadata": {},
             "source": [
-                "## Part 2: Train BanglaBERT (Auto-saves to /kaggle/working/banglabert_finetuned/)"
-            ]
+                "## Part 2: Submission Pipeline (NLI + LLM Judge + XGBoost)\n\n",
+                "See `implementation_plan.md` for the full strategy document.\n\n",
+                "### Feature set (14 features + 1 LLM judge):\n",
+                "- `nli_ctx_entail`, `nli_ctx_contra` — mDeBERTa-v3 entailment/contradiction\n",
+                "- `sim_premise_response`, `xlingual_consistency` — LaBSE cosine similarity\n",
+                "- `token_overlap_ctx_resp` — lexical Jaccard overlap\n",
+                "- `has_context` — binary context flag\n",
+                "- `word_entropy`, `char_entropy` — response randomness\n",
+                "- `novel_char_ratio` — extrinsic hallucination signal\n",
+                "- `length_ratio` — response vs prompt length ratio\n",
+                "- `deterministic_joggota` — rule-based verdict (idioms, math, spelling)\n",
+                "- `corpus_match_score` — TF-IDF retrieval grounding\n",
+                "- `cultural_default_flag` — C1 band cultural default detection\n",
+                "- `llm_judge_score` — Qwen2.5-1.5B logit-based faithfulness score (no-context rows)\n",
+            ],
         },
         {
             "cell_type": "code",
             "execution_count": None,
             "metadata": {},
             "outputs": [],
-            "source": [
-                "# Auto-training cell: fine-tunes BanglaBERT-large on 299 labeled samples + synthetic pairs\n",
-                "import os, gc, json, random, re\n",
-                "import numpy as np, pandas as pd\n",
-                "import torch, torch.nn as nn, torch.nn.functional as F\n",
-                "from torch.utils.data import Dataset, DataLoader\n",
-                "from sklearn.metrics import f1_score\n",
-                "from transformers import AutoTokenizer, AutoModelForSequenceClassification, get_cosine_schedule_with_warmup\n",
-                "\n",
-                "SEED = 42\n",
-                "random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)\n",
-                "if torch.cuda.is_available(): torch.cuda.manual_seed_all(SEED)\n",
-                "DEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n",
-                "MODEL_NAME = \"csebuetnlp/banglabert_large\"\n",
-                "BATCH_SIZE, EPOCHS, LR, MAX_LEN, WARMUP = 8, 3, 1e-5, 256, 0.1\n",
-                "CKPT_DIR = \"/kaggle/working/banglabert_finetuned\"\n",
-                "\n",
-                "# ---- Load & combine datasets ----\n",
-                "def _lp(path):\n",
-                "    with open(path, \"r\", encoding=\"utf-8\") as f: data = json.load(f)\n",
-                "    pre, resp, lbl = [], [], []\n",
-                "    for r in data:\n",
-                "        ctx = r.get(\"context\", \"\")\n",
-                "        if pd.isna(ctx) or str(ctx).strip().lower() in (\"[null]\", \"null\", \"none\", \"nan\", \"\"):\n",
-                "            premise = str(r[\"prompt_bn\"])\n",
-                "        else: premise = str(r[\"prompt_bn\"]) + \" \" + str(ctx).strip()\n",
-                "        pre.append(premise); resp.append(str(r[\"response_bn\"])); lbl.append(int(r[\"label\"]))\n",
-                "    return pre, resp, lbl\n",
-                "aug_premises, aug_responses, aug_labels = _lp(\"dataset samples.json\")\n",
-                "# Search for BenHalluEval in /kaggle/input/ (upload as a separate Kaggle dataset named 'benhallueval-training')\n",
-                "BE_PATH = None\n",
-                "for root, dirs, files in os.walk(\"/kaggle/input\"):\n",
-                "    for f in files:\n",
-                "        if f == \"benhallueval_training.json\":\n",
-                "            BE_PATH = os.path.join(root, f); break\n",
-                "if BE_PATH is None and os.path.exists(\"benhallueval_training.json\"): BE_PATH = \"benhallueval_training.json\"\n",
-                "if BE_PATH:\n",
-                "    bp, br, bl = _lp(BE_PATH)\n",
-                "    aug_premises.extend(bp); aug_responses.extend(br); aug_labels.extend(bl)\n",
-                "    print(f\"  + BenHalluEval from {BE_PATH}: {len(bp)} pairs ({sum(bl)} faithful, {len(bl)-sum(bl)} hallucinated)\")\n",
-                "else:\n",
-                "    print(\"  ⚠️ benhallueval_training.json not found — training on competition data only\")\n",
-                "# Shuffle combined data\n",
-                "combined = list(zip(aug_premises, aug_responses, aug_labels)); random.shuffle(combined)\n",
-                "aug_premises, aug_responses, aug_labels = [list(x) for x in zip(*combined)] if combined else ([],[],[])\n",
-                "print(f\"Total training: {len(aug_labels)} pairs ({sum(aug_labels)} faithful, {len(aug_labels)-sum(aug_labels)} hallucinated)\")\n",
-                "\n",
-                "# ---- Dataset ----\n",
-                "class TrainPairDS(Dataset):\n",
-                "    def __init__(self, prems, resps, ys, tok, mx=MAX_LEN):\n",
-                "        self.p=prems; self.h=resps; self.y=ys; self.t=tok; self.m=mx\n",
-                "    def __len__(self): return len(self.p)\n",
-                "    def __getitem__(self, i):\n",
-                "        e = self.t(self.p[i], self.h[i], truncation=True, max_length=self.m, padding=\"max_length\", return_tensors=\"pt\")\n",
-                "        return {\"input_ids\": e[\"input_ids\"].squeeze(0), \"attention_mask\": e[\"attention_mask\"].squeeze(0), \"labels\": torch.tensor(self.y[i], dtype=torch.long)}\n",
-                "\n",
-                "class FocalLoss(nn.Module):\n",
-                "    def __init__(self, gamma=2.0, alpha=1.0):\n",
-                "        super().__init__(); self.g = gamma; self.register_buffer(\"w\", torch.tensor([alpha, 1.0]))\n",
-                "    def forward(self, lg, y):\n",
-                "        ce = F.cross_entropy(lg, y, weight=self.w.to(lg.device), reduction=\"none\"); pt = torch.exp(-ce); return ((1-pt)**self.g*ce).mean()\n",
-                "\n",
-                "# ---- Train ----\n",
-                "from sklearn.model_selection import train_test_split\n",
-                "tp, vp, tr, vr, ty, vy = train_test_split(aug_premises, aug_responses, aug_labels, test_size=0.2, random_state=42, stratify=aug_labels)\n",
-                "tok = AutoTokenizer.from_pretrained(MODEL_NAME)\n",
-                "model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2, ignore_mismatched_sizes=True).float().to(DEVICE)\n",
-                "tld = DataLoader(TrainPairDS(tp, tr, ty, tok), batch_size=BATCH_SIZE, shuffle=True, pin_memory=True)\n",
-                "vld = DataLoader(TrainPairDS(vp, vr, vy, tok), batch_size=BATCH_SIZE*2, shuffle=False, pin_memory=True)\n",
-                "crit = FocalLoss(2.0, 1.0); opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)\n",
-                "tot = len(tld)*EPOCHS; sch = get_cosine_schedule_with_warmup(opt, int(tot*WARMUP), tot)\n",
-                "scaler = torch.amp.GradScaler(\"cuda\"); best_f1, best_state = 0.0, None\n",
-                "\n",
-                "@torch.no_grad()\n",
-                "def evalfn(m, ld):\n",
-                "    m.eval(); ap, al = [], []\n",
-                "    for b in ld:\n",
-                "        with torch.amp.autocast(\"cuda\", dtype=torch.float16): lg = m(input_ids=b[\"input_ids\"].to(DEVICE), attention_mask=b[\"attention_mask\"].to(DEVICE)).logits.float()\n",
-                "        pr = torch.softmax(lg, -1)[:,1].cpu().numpy(); ap.extend((pr>=0.5).astype(int)); al.extend(b[\"labels\"].numpy())\n",
-                "    return f1_score(al, ap)\n",
-                "\n",
-                "print(f\"Training {EPOCHS} epochs...\")\n",
-                "for ep in range(EPOCHS):\n",
-                "    model.train(); tl=0.0\n",
-                "    for b in tld:\n",
-                "        opt.zero_grad()\n",
-                "        with torch.amp.autocast(\"cuda\", dtype=torch.float16): lg = model(input_ids=b[\"input_ids\"].to(DEVICE), attention_mask=b[\"attention_mask\"].to(DEVICE)).logits; lo = crit(lg, b[\"labels\"].to(DEVICE))\n",
-                "        scaler.scale(lo).backward(); scaler.step(opt); scaler.update(); sch.step(); tl += lo.item()\n",
-                "    vf = evalfn(model, vld)\n",
-                "    print(f\"  Epoch {ep+1}: loss={tl/len(tld):.4f} | val F1={vf:.4f}\")\n",
-                "    if vf > best_f1: best_f1 = vf; best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}\n",
-                "\n",
-                "if best_state is not None: model.load_state_dict(best_state)\n",
-                "os.makedirs(CKPT_DIR, exist_ok=True)\n",
-                "model.save_pretrained(CKPT_DIR); tok.save_pretrained(CKPT_DIR)\n",
-                "print(f\"\\n✅ Saved fine-tuned model to {CKPT_DIR}/ (val F1={best_f1:.4f})\")\n",
-                "del model, tok, tld, vld; gc.collect(); torch.cuda.empty_cache()\n",
-                "print(\"Training complete. Ready for inference.\")\n"
-            ]
+            "source": [line + "\n" for line in pipeline_code.split("\n")],
         },
         {
             "cell_type": "markdown",
             "metadata": {},
             "source": [
-                "## Part 3: Submission Pipeline (NLI + BanglaBERT + XGBoost)"
-            ]
-        },
-        {
-            "cell_type": "code",
-            "execution_count": None,
-            "metadata": {},
-            "outputs": [],
-            "source": [line + "\n" for line in pipeline_code.split("\n")]
-        },
-        {
-            "cell_type": "markdown",
-            "metadata": {},
-            "source": [
-                "## Part 4: Run Inference"
-            ]
+                "## Part 3: Run Inference"
+            ],
         },
         {
             "cell_type": "code",
@@ -203,21 +109,30 @@ notebook = {
             "outputs": [],
             "source": [
                 "train_and_predict()\n"
-            ]
-        }
+            ],
+        },
     ],
     "metadata": {
         "kernelspec": {
             "display_name": "Python 3",
             "language": "python",
-            "name": "python3"
-        }
+            "name": "python3",
+        },
+        "language_info": {
+            "name": "python",
+            "version": "3.10.0",
+        },
     },
     "nbformat": 4,
-    "nbformat_minor": 4
+    "nbformat_minor": 4,
 }
 
 with open("submission_kaggle.ipynb", "w", encoding="utf-8") as f:
-    json.dump(notebook, f, indent=2)
+    json.dump(notebook, f, indent=2, ensure_ascii=False)
 
-print("Created submission_kaggle.ipynb (self-contained, no external imports)")
+print("✅ Created submission_kaggle.ipynb (self-contained)")
+
+# Quick sanity: verify the notebook JSON is valid
+with open("submission_kaggle.ipynb", "r", encoding="utf-8") as f:
+    json.load(f)
+print("✅ Notebook JSON is valid")

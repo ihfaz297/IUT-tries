@@ -255,6 +255,36 @@ def deterministic_lexical_joggota(prompt: str, response: str, task_type: str) ->
     # For now, we abstain if no strict rule was triggered.
     return -1.0 
 
+def cultural_default_penalty(prompt: str, response: str) -> float:
+    """
+    Detects C1 band 'Cultural Default' hallucinations.
+    Returns 1.0 if a known cultural default is detected in the response instead of the expected Bangladesh-specific truth, otherwise 0.0.
+    """
+    p = str(prompt).lower()
+    r = str(response).lower()
+    
+    # 1. Yunus Nobel (Expected: Peace/শান্তি, Default: Economics/অর্থনীতি)
+    if 'ইউনূস' in p or 'yunus' in p:
+        if 'নোবেল' in p or 'nobel' in p:
+            if 'অর্থনীতি' in r or 'economics' in r:
+                return 1.0
+                
+    # 2. National Poet / Specific Authors (Expected: Nazrul/নজরুল or others, Default: Tagore/রবীন্দ্রনাথ)
+    if 'কবি' in p or 'লেখক' in p or 'উপন্যাস' in p or 'কবিতা' in p:
+        # If the prompt does NOT mention Tagore, but response DOES
+        if 'রবীন্দ্রনাথ' not in p and 'রবীন্দ্রনাথ' in r:
+            return 1.0
+            
+    # 3. ORS / Saline (Expected: Bangladesh/ICDDR,B/Rafiqul, Default: Western/পাশ্চাত্য/WHO)
+    if 'স্যালাইন' in p or 'ors' in p or 'saline' in p:
+        if 'পাশ্চাত্য' in r or 'western' in r or 'america' in r or 'মার্কিন' in r:
+            return 1.0
+            
+    # 4. First President/PM (Expected: Mujib/Tajuddin, Default: Zia/Others depending on context)
+    # This is trickier, keeping it simple for now.
+    
+    return 0.0
+
 def extract_joggota_features(df: pd.DataFrame) -> pd.DataFrame:
     """Applies the Form Engine and Deterministic Joggota to the entire dataframe."""
     df_out = df.copy()
@@ -277,6 +307,11 @@ def extract_joggota_features(df: pd.DataFrame) -> pd.DataFrame:
     # 3. Deterministic Joggota
     df_out['deterministic_joggota'] = df_out.apply(
         lambda row: deterministic_lexical_joggota(row['prompt_bn'], row['response_bn'], row['task_type']), axis=1
+    )
+    
+    # 3b. Cultural Default Flag
+    df_out['cultural_default_flag'] = df_out.apply(
+        lambda row: cultural_default_penalty(row['prompt_bn'], row['response_bn']), axis=1
     )
     
     # 4. Corpus Retrieval Grounding (Mini-RAG)
