@@ -9,6 +9,10 @@ Output: submission_kaggle.ipynb
 """
 import json
 import re
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # Read both source files (normalize line endings for Windows compat)
 with open("joggota_core.py", "r", encoding="utf-8") as f:
@@ -39,9 +43,9 @@ notebook = {
                 "### Kaggle Setup Checklist:\n",
                 "1. GPU: **T4 x2** or **P100** (16 GB VRAM minimum)\n",
                 "2. Upload `dataset samples.json` and `test set.csv`\n",
-                "3. Upload `offline_corpus.json` alongside this notebook\n",
-                "4. For LLM Judge: upload Qwen2.5-1.5B-Instruct as a Kaggle Dataset → `/kaggle/input/qwen2.5-1.5b-instruct`\n",
+                "3. For LLM Judge: upload Qwen2.5-1.5B-Instruct as a Kaggle Dataset → `/kaggle/input/qwen2.5-1.5b-instruct`\n",
                 "   - OR download during Phase 1 via `download_models.py` before uploading\n",
+                "4. For the cross-lingual check: upload NLLB-200-distilled-600M as a Kaggle Dataset → `/kaggle/input/nllb-200-distilled-600m`\n",
                 "5. For Phase 2: toggle **Internet OFF** before running (all models must be offline)"
             ],
         },
@@ -74,8 +78,11 @@ notebook = {
             "source": [
                 "## Part 2: Submission Pipeline (NLI + LLM Judge + XGBoost)\n\n",
                 "See `implementation_plan.md` for the full strategy document.\n\n",
-                "### Feature set (14 features + 1 LLM judge):\n",
-                "- `nli_ctx_entail`, `nli_ctx_contra` — mDeBERTa-v3 entailment/contradiction\n",
+                "### Feature set:\n",
+                "- `nli_ctx_entail`, `nli_ctx_contra` — mDeBERTa-v3 entailment/contradiction (bn)\n",
+                "- `nli_en_entail`, `nli_en_contra`, `cross_lingual_disagreement` — same NLI check re-run on\n",
+                "  the NLLB-translated English text; disagreement vs the bn verdict is the\n",
+                "  \"correct in English, wrong in Bengali\" signal the organizers flagged as strongest\n",
                 "- `sim_premise_response`, `xlingual_consistency` — LaBSE cosine similarity\n",
                 "- `token_overlap_ctx_resp` — lexical Jaccard overlap\n",
                 "- `has_context` — binary context flag\n",
@@ -83,8 +90,9 @@ notebook = {
                 "- `novel_char_ratio` — extrinsic hallucination signal\n",
                 "- `length_ratio` — response vs prompt length ratio\n",
                 "- `deterministic_joggota` — rule-based verdict (idioms, math, spelling)\n",
-                "- `corpus_match_score` — TF-IDF retrieval grounding\n",
                 "- `cultural_default_flag` — C1 band cultural default detection\n",
+                "- `context_containment` — response bigrams verbatim in context\n",
+                "- `resp_is_refusal`, `resp_code_switch_ratio`, `resp_repetition_score`, `resp_is_question` — response quality heuristics\n",
                 "- `llm_judge_score` — Qwen2.5-1.5B logit-based faithfulness score (no-context rows)\n",
             ],
         },

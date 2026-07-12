@@ -1,156 +1,12 @@
 import math
 import re
-import os
-import json
 import numpy as np
 from collections import Counter
 import pandas as pd
 
-# ==========================================
-# 0. OFFLINE CORPUS RETRIEVER (Mini-RAG)
-# ==========================================
-
-CORPUS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "offline_corpus.json")
-
 def _bn_words(text):
     """Tokenize Bengali text into words (Bengali unicode + ASCII tokens)."""
     return re.findall(r"[\u0980-\u09FF]+|\w+", str(text).lower())
-
-class CorpusRetriever:
-    """
-    Lightweight TF-IDF retrieval engine.
-    Loads offline_corpus.json once at init. For a given query,
-    returns the best-matching paragraph and a similarity score.
-    Zero external dependencies beyond numpy.
-    """
-    def __init__(self, corpus_path=CORPUS_PATH):
-        self.paragraphs = []
-        self.sources = []
-        self.vocab = {}        # word -> index
-        self.idf = None        # numpy array
-        self.tfidf_matrix = None  # (n_docs, vocab_size)
-        
-        if not os.path.exists(corpus_path):
-            print(f"[CorpusRetriever] WARNING: {corpus_path} not found. Retrieval features disabled.")
-            self.enabled = False
-            return
-        
-        with open(corpus_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        
-        self.paragraphs = [d["text"] for d in data]
-        self.sources = [d["source"] for d in data]
-        
-        if len(self.paragraphs) == 0:
-            self.enabled = False
-            return
-        
-        self.enabled = True
-        self._build_index()
-        print(f"[CorpusRetriever] Loaded {len(self.paragraphs)} paragraphs from corpus.")
-
-    def _build_index(self):
-        """Build TF-IDF vectors for all paragraphs."""
-        # Step 1: Build vocabulary from all documents
-        doc_word_counts = []
-        doc_freq = Counter()  # how many docs contain each word
-        
-        for para in self.paragraphs:
-            words = _bn_words(para)
-            wc = Counter(words)
-            doc_word_counts.append(wc)
-            for w in set(words):
-                doc_freq[w] += 1
-        
-        # Only keep words that appear in >= 2 docs (filters noise)
-        vocab_words = [w for w, freq in doc_freq.items() if freq >= 2]
-        self.vocab = {w: i for i, w in enumerate(vocab_words)}
-        V = len(self.vocab)
-        N = len(self.paragraphs)
-        
-        # Step 2: Compute IDF
-        self.idf = np.zeros(V)
-        for w, idx in self.vocab.items():
-            self.idf[idx] = math.log((N + 1) / (doc_freq[w] + 1)) + 1  # smoothed IDF
-        
-        # Step 3: Build TF-IDF matrix
-        self.tfidf_matrix = np.zeros((N, V))
-        for doc_i, wc in enumerate(doc_word_counts):
-            total = sum(wc.values())
-            for w, c in wc.items():
-                if w in self.vocab:
-                    tf = c / total
-                    self.tfidf_matrix[doc_i, self.vocab[w]] = tf * self.idf[self.vocab[w]]
-        
-        # Normalize rows for cosine similarity
-        norms = np.linalg.norm(self.tfidf_matrix, axis=1, keepdims=True)
-        norms[norms == 0] = 1
-        self.tfidf_matrix = self.tfidf_matrix / norms
-
-    def query(self, text, top_k=1):
-        """
-        Returns (best_score, best_paragraph, best_source) for the given text.
-        Score is cosine similarity (0 to 1). Higher = better match.
-        """
-        if not self.enabled:
-            return 0.0, "", ""
-        
-        words = _bn_words(text)
-        if not words:
-            return 0.0, "", ""
-        
-        # Build query vector
-        wc = Counter(words)
-        total = sum(wc.values())
-        q_vec = np.zeros(len(self.vocab))
-        for w, c in wc.items():
-            if w in self.vocab:
-                tf = c / total
-                q_vec[self.vocab[w]] = tf * self.idf[self.vocab[w]]
-        
-        q_norm = np.linalg.norm(q_vec)
-        if q_norm == 0:
-            return 0.0, "", ""
-        q_vec = q_vec / q_norm
-        
-        # Cosine similarity against all docs
-        scores = self.tfidf_matrix @ q_vec
-        best_idx = np.argmax(scores)
-        return float(scores[best_idx]), self.paragraphs[best_idx], self.sources[best_idx]
-
-    def score_grounding(self, prompt, response):
-        """
-        Composite grounding score: how well does the response match
-        corpus evidence retrieved for the prompt?
-        Returns a float 0-1. High = response is well-grounded.
-        """
-        if not self.enabled:
-            return 0.0
-        
-        # Retrieve the best corpus paragraph for this prompt
-        prompt_score, best_para, _ = self.query(prompt)
-        
-        if prompt_score < 0.05:
-            # Prompt doesn't match anything in our corpus — can't judge
-            return 0.0
-        
-        # Now check: does the response align with the retrieved evidence?
-        resp_score, _, _ = self.query(response)
-        
-        # Also check overlap between response and the specific retrieved paragraph
-        resp_words = set(_bn_words(response))
-        para_words = set(_bn_words(best_para))
-        if not resp_words:
-            return 0.0
-        overlap = len(resp_words & para_words) / len(resp_words)
-        
-        # Blend: retrieval relevance + direct word overlap
-        return 0.5 * resp_score + 0.5 * overlap
-
-
-# Singleton — loaded once when joggota_core is imported
-_corpus_retriever = CorpusRetriever()
-
 
 # ==========================================
 # 1. THE FORM ENGINE (Akangkha & Asotti)
@@ -186,6 +42,63 @@ def response_length_ratio(prompt, response):
     p_len = len(str(prompt).strip())
     r_len = len(str(response).strip())
     return r_len / max(p_len, 1)
+
+
+# ==========================================
+# 1b. CONTEXT GROUNDING & RESPONSE QUALITY
+# ==========================================
+
+def _ngrams(words, n):
+    return set(zip(*[words[i:] for i in range(n)])) if len(words) >= n else set()
+
+def context_containment(context, response):
+    """
+    Fraction of the response's word bigrams that appear verbatim in the context.
+    High score = response text is directly lifted from context (strong faithfulness signal).
+    Only meaningful for context rows.
+    """
+    if pd.isna(context) or str(context).strip() in {"", "[NULL]", "nan", "NaN"}:
+        return 0.0
+    ctx_words = _bn_words(context)
+    resp_words = _bn_words(response)
+    resp_bigrams = _ngrams(resp_words, 2)
+    if not resp_bigrams:
+        return 0.0
+    ctx_bigrams = _ngrams(ctx_words, 2)
+    return len(resp_bigrams & ctx_bigrams) / len(resp_bigrams)
+
+REFUSAL_PHRASES = [
+    "আমি জানি না", "আমার জানা নেই", "দুঃখিত", "ক্ষমা করবেন", "ক্ষমাপ্রার্থী",
+    "উত্তর দেওয়া সম্ভব নয়", "নিশ্চিত নই", "বলতে পারছি না", "তথ্য নেই",
+]
+
+def resp_is_refusal(response):
+    """Flags deflection/refusal responses instead of an actual answer."""
+    r = str(response)
+    return 1.0 if any(phrase in r for phrase in REFUSAL_PHRASES) else 0.0
+
+def resp_code_switch_ratio(response):
+    """Ratio of Latin-alphabet word tokens to total word tokens in the response."""
+    words = _bn_words(response)
+    if not words:
+        return 0.0
+    latin = sum(1 for w in words if re.fullmatch(r"[a-z0-9]+", w))
+    return latin / len(words)
+
+def resp_repetition_score(response):
+    """1 - (unique bigrams / total bigrams). Higher = more internal repetition."""
+    words = _bn_words(response)
+    if len(words) < 2:
+        return 0.0
+    bigrams = list(zip(words, words[1:]))
+    if not bigrams:
+        return 0.0
+    return 1.0 - (len(set(bigrams)) / len(bigrams))
+
+def resp_is_question(response):
+    """Response deflects by ending with a question mark instead of answering."""
+    r = str(response).strip()
+    return 1.0 if r.endswith("?") else 0.0
 
 
 # ==========================================
@@ -303,7 +216,14 @@ def extract_joggota_features(df: pd.DataFrame) -> pd.DataFrame:
     df_out['novel_char_ratio'] = df_out.apply(lambda row: novel_char_ratio(row['context'], row['response_bn']), axis=1)
     df_out['length_ratio'] = df_out.apply(lambda row: response_length_ratio(row['prompt_bn'], row['response_bn']), axis=1)
     df_out['resp_len'] = df_out['response_bn'].str.len()
-    
+
+    # 2b. Context Grounding & Response Quality
+    df_out['context_containment'] = df_out.apply(lambda row: context_containment(row['context'], row['response_bn']), axis=1)
+    df_out['resp_is_refusal'] = df_out['response_bn'].apply(resp_is_refusal)
+    df_out['resp_code_switch_ratio'] = df_out['response_bn'].apply(resp_code_switch_ratio)
+    df_out['resp_repetition_score'] = df_out['response_bn'].apply(resp_repetition_score)
+    df_out['resp_is_question'] = df_out['response_bn'].apply(resp_is_question)
+
     # 3. Deterministic Joggota
     df_out['deterministic_joggota'] = df_out.apply(
         lambda row: deterministic_lexical_joggota(row['prompt_bn'], row['response_bn'], row['task_type']), axis=1
@@ -313,11 +233,5 @@ def extract_joggota_features(df: pd.DataFrame) -> pd.DataFrame:
     df_out['cultural_default_flag'] = df_out.apply(
         lambda row: cultural_default_penalty(row['prompt_bn'], row['response_bn']), axis=1
     )
-    
-    # 4. Corpus Retrieval Grounding (Mini-RAG)
-    print("Computing corpus grounding scores...")
-    df_out['corpus_match_score'] = df_out.apply(
-        lambda row: _corpus_retriever.score_grounding(row['prompt_bn'], row['response_bn']), axis=1
-    )
-    
+
     return df_out

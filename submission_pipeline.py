@@ -23,6 +23,7 @@ from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
     AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
 )
 
 # Import our custom Joggota rules
@@ -38,6 +39,15 @@ SUBMISSION_OUT = "submission.csv"
 
 EMBED_MODEL_NAME = "sentence-transformers/LaBSE"
 NLI_MODEL_NAME = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
+
+# bn->en translation, used to build the cross-lingual disagreement signal
+# ("model correct in English, wrong in Bengali" — the organizers flagged this
+#  as the single strongest signal in the benchmark).
+TRANSLATOR_CHECKPOINTS = [
+    "/kaggle/input/nllb-200-distilled-600m",
+    "offline_models/nllb-200-distilled-600m",
+    "facebook/nllb-200-distilled-600M",
+]
 
 # Offline checkpoints (Kaggle dataset mounts or local downloads)
 LLM_CHECKPOINTS = [
@@ -143,6 +153,47 @@ class NLIScorer:
             probs = torch.softmax(logits, dim=-1).cpu().numpy()
             all_probs.append(probs)
         return np.vstack(all_probs)
+
+
+class Translator:
+    """
+    NLLB-200-distilled-600M, Bengali -> English.
+    Used to get a second, English-language NLI verdict on the same
+    (premise, response) pair — the model is generally more reliable in
+    English, so disagreement between the bn-verdict and en-verdict is a
+    hallucination signal in its own right (cross-lingual inconsistency).
+    """
+    def __init__(self, checkpoint_path=None, device=None):
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        model_path = checkpoint_path or "facebook/nllb-200-distilled-600M"
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, src_lang="ben_Beng")
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_path).to(self.device)
+        self.model.eval()
+        self.eng_id = self.tokenizer.convert_tokens_to_ids("eng_Latn")
+
+    @torch.no_grad()
+    def translate_batch(self, texts, batch_size=16, max_length=200):
+        clean = []
+        for t in texts:
+            if t is None or (isinstance(t, float) and np.isnan(t)):
+                clean.append("।")
+            else:
+                t = str(t)
+                clean.append(t if t.strip() else "।")
+
+        outputs = []
+        for i in range(0, len(clean), batch_size):
+            batch = clean[i : i + batch_size]
+            inputs = self.tokenizer(
+                batch, return_tensors="pt", padding=True,
+                truncation=True, max_length=max_length,
+            ).to(self.device)
+            generated = self.model.generate(
+                **inputs, forced_bos_token_id=self.eng_id,
+                max_length=max_length, num_beams=1,
+            )
+            outputs.extend(self.tokenizer.batch_decode(generated, skip_special_tokens=True))
+        return outputs
 
 
 class SmallLLMJudge:
@@ -323,7 +374,7 @@ def token_overlap_ratio(a, b):
 # ----------------------------------------------------------------------
 # 5. UNIFIED FEATURE PIPELINE
 # ----------------------------------------------------------------------
-def build_base_features(df, embedder, nli_scorer):
+def build_base_features(df, embedder, nli_scorer, translator=None):
     """Phase 1: NLI + Embeddings + Joggota deterministic features."""
     print("Extracting Form & Deterministic Joggota features...")
     df = extract_joggota_features(df)
@@ -338,6 +389,22 @@ def build_base_features(df, embedder, nli_scorer):
     probs_ctx = nli_scorer.score_batch(premise_ctx.tolist(), response_col.tolist())
     df["nli_ctx_entail"] = probs_ctx[:, 0]
     df["nli_ctx_contra"] = probs_ctx[:, 2]
+
+    # --- Cross-lingual NLI verification (translate bn->en, re-verify) ---
+    if translator is not None:
+        print("Translating premise/response to English for cross-lingual check...")
+        premise_en = translator.translate_batch(premise_ctx.tolist())
+        response_en = translator.translate_batch(response_col.tolist())
+        probs_en = nli_scorer.score_batch(premise_en, response_en)
+        df["nli_en_entail"] = probs_en[:, 0]
+        df["nli_en_contra"] = probs_en[:, 2]
+        # Positive = bn NLI says entailed but en (translated) verdict disagrees —
+        # the "correct in English, wrong in Bengali" pattern the organizers flagged.
+        df["cross_lingual_disagreement"] = df["nli_ctx_entail"] - df["nli_en_entail"]
+    else:
+        df["nli_en_entail"] = 0.0
+        df["nli_en_contra"] = 0.0
+        df["cross_lingual_disagreement"] = 0.0
 
     # --- LaBSE Embeddings ---
     print("Running Embeddings...")
@@ -358,6 +425,9 @@ def build_base_features(df, embedder, nli_scorer):
     feature_cols = [
         "nli_ctx_entail",
         "nli_ctx_contra",
+        "nli_en_entail",
+        "nli_en_contra",
+        "cross_lingual_disagreement",
         "sim_premise_response",
         "xlingual_consistency",
         "token_overlap_ctx_resp",
@@ -367,8 +437,12 @@ def build_base_features(df, embedder, nli_scorer):
         "novel_char_ratio",
         "length_ratio",
         "deterministic_joggota",
-        "corpus_match_score",
         "cultural_default_flag",
+        "context_containment",
+        "resp_is_refusal",
+        "resp_code_switch_ratio",
+        "resp_repetition_score",
+        "resp_is_question",
     ]
     df[feature_cols] = df[feature_cols].fillna(0)
 
@@ -458,8 +532,18 @@ def _save_run_log(train_df, test_df, feature_cols, cv_results=None, used_fallbac
 
 
 def _cross_validate(X, y, n_folds=5):
+    """
+    Reports three F1 variants because the competition's own materials disagree:
+    Overview says "macro-F1", Rules Section 7 says "Primary metric: binary F1
+    on the HALLUCINATED class (label = 0)". label=1 is faithful in this dataset,
+    so sklearn's default f1_score(y, pred) (pos_label=1) silently measures the
+    FAITHFUL class, not hallucinated — that was a live bug in every prior CV run.
+    hallu_f1 is treated as primary (it's the one under an explicit "Primary
+    metric" heading) until the organizers resolve the discrepancy.
+    """
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=RANDOM_STATE)
-    scores = []
+    hallu_scores, faithful_scores, macro_scores = [], [], []
+    oof_probs = np.zeros(len(y), dtype=np.float64)
     for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
         X_tr, X_val = X[train_idx], X[val_idx]
         y_tr, y_val = y[train_idx], y[val_idx]
@@ -468,15 +552,41 @@ def _cross_validate(X, y, n_folds=5):
             subsample=0.8, colsample_bytree=0.8, random_state=RANDOM_STATE,
         )
         model.fit(X_tr, y_tr)
-        preds = model.predict(X_val)
-        f1 = f1_score(y_val, preds)
-        scores.append(f1)
-        print(f"   Fold {fold + 1}: F1 = {f1:.4f}")
-    mean_f1 = np.mean(scores)
-    std_f1 = np.std(scores)
+        val_probs = model.predict_proba(X_val)[:, 1]
+        oof_probs[val_idx] = val_probs
+        preds = (val_probs >= 0.5).astype(int)
+        f1_hallu = f1_score(y_val, preds, pos_label=0)
+        f1_faithful = f1_score(y_val, preds, pos_label=1)
+        f1_macro = f1_score(y_val, preds, average="macro")
+        hallu_scores.append(f1_hallu)
+        faithful_scores.append(f1_faithful)
+        macro_scores.append(f1_macro)
+        print(f"   Fold {fold + 1}: hallu_F1={f1_hallu:.4f}  faithful_F1={f1_faithful:.4f}  macro_F1={f1_macro:.4f}")
     print(f"   {'='*30}")
-    print(f"   CV F1: {mean_f1:.4f} ± {std_f1:.4f}")
-    return scores
+    print(f"   CV hallu_F1 (primary, @0.5): {np.mean(hallu_scores):.4f} ± {np.std(hallu_scores):.4f}")
+    print(f"   CV faithful_F1 (@0.5):       {np.mean(faithful_scores):.4f} ± {np.std(faithful_scores):.4f}")
+    print(f"   CV macro_F1 (@0.5):          {np.mean(macro_scores):.4f} ± {np.std(macro_scores):.4f}")
+    return hallu_scores, oof_probs
+
+
+def _find_best_threshold(y_true, oof_probs, metric="hallu"):
+    """
+    Grid-search the decision threshold on out-of-fold probabilities to
+    maximize the given F1 variant. Using OOF (not in-sample) probs avoids
+    tuning the threshold on data the model has already seen.
+    """
+    best_t, best_score = 0.5, -1.0
+    for t in np.arange(0.05, 0.96, 0.01):
+        preds = (oof_probs >= t).astype(int)
+        if metric == "hallu":
+            score = f1_score(y_true, preds, pos_label=0, zero_division=0)
+        elif metric == "macro":
+            score = f1_score(y_true, preds, average="macro", zero_division=0)
+        else:
+            score = f1_score(y_true, preds, pos_label=1, zero_division=0)
+        if score > best_score:
+            best_t, best_score = t, score
+    return best_t, best_score
 
 
 # ----------------------------------------------------------------------
@@ -493,16 +603,29 @@ def train_and_predict():
     # ===================================================================
     # PHASE 1: NLI + Embeddings + Joggota (GPU)
     # ===================================================================
-    print("\nLoading NLI & Embedding models...")
+    print("\nLoading NLI, Embedding & Translator models...")
     embedder = Embedder()
     nli_scorer = NLIScorer()
 
+    translator = None
+    try:
+        translator_ckpt = None
+        for candidate in TRANSLATOR_CHECKPOINTS:
+            if os.path.exists(candidate):
+                translator_ckpt = candidate
+                print(f"  Found translator checkpoint: {translator_ckpt}")
+                break
+        translator_ckpt = translator_ckpt or "facebook/nllb-200-distilled-600M"
+        translator = Translator(checkpoint_path=translator_ckpt)
+    except Exception as e:
+        print(f"  Translator failed to load ({e}) — cross-lingual features will be 0.")
+
     print("\n--- PHASE 1: Base Features ---")
     print("--- Processing Train Set ---")
-    train_df, feature_cols = build_base_features(train_df, embedder, nli_scorer)
+    train_df, feature_cols = build_base_features(train_df, embedder, nli_scorer, translator)
 
     print("\n--- Processing Test Set ---")
-    test_df, _ = build_base_features(test_df, embedder, nli_scorer)
+    test_df, _ = build_base_features(test_df, embedder, nli_scorer, translator)
 
     _log_task_distribution(train_df)
     _log_task_distribution(test_df)
@@ -512,6 +635,9 @@ def train_and_predict():
     embedder.model.to("cpu")
     nli_scorer.model.to("cpu")
     del embedder, nli_scorer
+    if translator is not None:
+        translator.model.to("cpu")
+        del translator
     _force_gpu_cleanup()
 
     # ===================================================================
@@ -576,7 +702,11 @@ def train_and_predict():
     X_test = test_df[feature_cols].values
 
     print("\n📐 5-Fold Cross-Validation:")
-    cv_scores = _cross_validate(X_train, y_train, n_folds=N_FOLDS)
+    cv_scores, oof_probs = _cross_validate(X_train, y_train, n_folds=N_FOLDS)
+
+    best_threshold, best_oof_hallu_f1 = _find_best_threshold(y_train, oof_probs, metric="hallu")
+    print(f"\n🎯 OOF-tuned threshold (maximizing hallucinated-class F1): "
+          f"{best_threshold:.2f} -> OOF hallu_F1={best_oof_hallu_f1:.4f}")
 
     print("\n🏋️  Training final model on full training set...")
     model = xgb.XGBClassifier(
@@ -592,7 +722,7 @@ def train_and_predict():
 
     print("\nPredicting on test set...")
     probs = model.predict_proba(X_test)[:, 1]
-    preds = (probs >= 0.5).astype(int)
+    preds = (probs >= best_threshold).astype(int)
 
     _log_final_distribution(preds, test_df)
 
