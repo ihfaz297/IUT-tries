@@ -105,13 +105,30 @@ def resp_is_question(response):
 # 2. DETERMINISTIC JOGGOTA (Rules & Regex)
 # ==========================================
 
+_MATH_KEYWORDS = ["সম্ভাবনা", "যোগ", "বিয়োগ", "গুণ", "ভাগ", "সংখ্যা",
+                  "সমীকরণ", "ক্ষেত্রফল", "পরিসীমা", "লসাগু", "গসাগু"]
+
+_BN_NUMBER_WORDS = [
+    "শূন্য", "এক", "দুই", "তিন", "চার", "পাঁচ", "ছয়", "সাত", "আট", "নয়", "দশ",
+    "এগার", "বার", "তের", "চৌদ্দ", "পনের", "ষোল", "সতের", "আঠার", "উনিশ", "বিশ",
+    "ত্রিশ", "চল্লিশ", "পঞ্চাশ", "ষাট", "সত্তর", "আশি", "নব্বই",
+    "শত", "হাজার", "লক্ষ", "কোটি",
+]
+_MCQ_OPTIONS = {"ক", "খ", "গ", "ঘ", "ঙ"}
+
 def classify_task(prompt: str) -> str:
     """Classifies the task type to route the validation logic."""
     p = str(prompt).lower()
     if re.search(r'বাগধারা|প্রবাদ|প্রবচন', p): return "idiom"
     if re.search(r'অর্থ|ভাবার্থ|শাব্দিক|সমার্থক|বিপরীত|প্রতিশব্দ', p): return "vocabulary"
     if re.search(r'বানান|শুদ্ধ বানান', p): return "spelling"
-    if re.search(r'সম্ভাবনা|যোগ|বিয়োগ|গুণ|ভাগ|সংখ্যা|সমীকরণ|ক্ষেত্রফল|পরিসীমা|লসাগু|গসাগু', p): return "math"
+    # Prefix match on whitespace tokens, not substring search on the raw string --
+    # "ভাগ" (divide) and "যোগ" (add) are short enough to false-positive as substrings
+    # inside unrelated words like "বিভাগ" (department) and "প্রতিযোগিতা" (competition).
+    # Bengali suffixes attach at the end of a stem, so a real match always starts the token.
+    tokens = p.split()
+    if any(tok.startswith(kw) for tok in tokens for kw in _MATH_KEYWORDS):
+        return "math"
     if re.search(r'অনুবাদ|ইংরেজি|translate', p): return "translation"
     if re.search(r'সমাস|ব্যাকরণ|কারক|বিভক্তি|ধাতু|প্রত্যয়|উপসর্গ', p): return "grammar"
     return "factual"
@@ -135,8 +152,13 @@ def deterministic_lexical_joggota(prompt: str, response: str, task_type: str) ->
             
     if task_type == "math":
         # If math, extract numbers. If there are NO numbers in response, it's likely a hallucinated refusal.
+        # \d matches Bengali digits (০-৯) too, but misses spelled-out number words
+        # ("সাতটি" = "seven") and MCQ letter answers ("গ" = option C) -- both are
+        # valid, non-hallucinated responses that don't contain a literal digit.
         resp_numbers = re.findall(r'\d+', resp_clean)
-        if not resp_numbers:
+        has_number_word = any(w in resp_clean for w in _BN_NUMBER_WORDS)
+        is_mcq_letter = resp_clean.strip('।.?!০-৯0-9') in _MCQ_OPTIONS
+        if not resp_numbers and not has_number_word and not is_mcq_letter:
             return 0.0
             
     if task_type == "idiom":
