@@ -19,7 +19,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
 
-sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 train = pd.read_pickle("fusion_train_features.pkl")
 test = pd.read_pickle("fusion_test_features.pkl")
