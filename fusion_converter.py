@@ -20,6 +20,14 @@ if hasattr(sys.stdout, "reconfigure"):
 with open("joggota_core.py", "r", encoding="utf-8") as f:
     joggota_code = f.read().replace("\r\n", "\n")
 
+with open("ground_truth_matcher.py", "r", encoding="utf-8") as f:
+    matcher_code = f.read().replace("\r\n", "\n")
+# strip the __main__ self-test block -- it reads dataset samples.json and prints a manual
+# spot-check, useful when developing locally but not something the notebook should re-run
+MATCHER_GUARD_RE = re.compile(r'\nif __name__ == "__main__":\n.*\Z', re.DOTALL)
+matcher_code, n_subs = MATCHER_GUARD_RE.subn("\n", matcher_code)
+assert n_subs == 1, f"expected to strip exactly one __main__ block from ground_truth_matcher.py, stripped {n_subs}"
+
 with open("submission_pipeline.py", "r", encoding="utf-8") as f:
     pipeline_code = f.read().replace("\r\n", "\n")
 
@@ -57,6 +65,9 @@ fusion_code = fusion_code.replace(
 )
 fusion_code = fusion_code.replace(
     "from submission_pipeline import Translator, TRANSLATOR_CHECKPOINTS\n", "# [inlined above]\n",
+)
+fusion_code = fusion_code.replace(
+    "from ground_truth_matcher import GroundTruthMatcher, compute_gt_features\n", "# [inlined above]\n",
 )
 
 def _banner_start_before(text, marker):
@@ -123,6 +134,20 @@ notebook = {
         {
             "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
             "source": [line + "\n" for line in joggota_code.split("\n")],
+        },
+        {
+            "cell_type": "markdown", "metadata": {},
+            "source": [
+                "## Part 1.5: ground-truth-source matcher (NCTB-QA + TyDi QA gold-passage)\n\n",
+                "CPU-only, no GPU needed. Both sources auto-download from HuggingFace (ungated, "
+                "public) if not already present locally -- NCTB-QA directly, TyDi QA via the "
+                "upstream `secondary_task` (gold-passage) config, filtered to Bengali and cached. "
+                "Falls back to a local file first if one is already attached as a Kaggle dataset input.",
+            ],
+        },
+        {
+            "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+            "source": [line + "\n" for line in matcher_code.split("\n")],
         },
         {
             "cell_type": "markdown", "metadata": {},

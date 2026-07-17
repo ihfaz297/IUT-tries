@@ -1,0 +1,147 @@
+[12:58, 16/07/2026] Sanjoy: Marma?
+[14:01, 16/07/2026] Alvee Ahnaf: https://multiling.cloud/
+[14:03, 16/07/2026] Sanjoy: K bnaise eta
+[14:03, 16/07/2026] Alvee Ahnaf: janina
+[14:03, 16/07/2026] Alvee Ahnaf: but sushmit khanki involded edar sathe
+[14:03, 16/07/2026] Sanjoy: Ehon ko toppic ki deya jy
+[14:03, 16/07/2026] Alvee Ahnaf: ekta language focus kori
+[14:04, 16/07/2026] Alvee Ahnaf: model closed weight banay
+[14:04, 16/07/2026] Alvee Ahnaf: gooogle r kase bechi
+[14:04, 16/07/2026] Alvee Ahnaf: karo loge collab korum na
+[14:04, 16/07/2026] Sanjoy: Chkma
+Mrma
+Monipuri
+Which one
+[14:04, 16/07/2026] Alvee Ahnaf: chakma
+[14:04, 16/07/2026] Sanjoy: Alr
+[14:05, 16/07/2026] Alvee Ahnaf: https://bangla.gov.bd/brainlab
+
+[04:08, 16/07/2026] Sanjoy: s: it depends on your approach, but effective work has been done with anywhere from a few thousand to a few hundred million words.
+[04:08, 16/07/2026] Sanjoy: eto data manage krte prbi?
+[05:12, 16/07/2026] Isfahan: eto data manage krte prbi?
+Dhor approach e dekhailam...novelty thakar kotha I guess
+[05:13, 16/07/2026] Sanjoy: Lora use krle kom datay hbe
+[05:13, 16/07/2026] Isfahan: Lora use krle kom datay hbe
+We'll figure the architecture out later
+[05:13, 16/07/2026] Isfahan: Topic ki decide korsos
+[05:13, 16/07/2026] Sanjoy: Input kmmne
+Bangla text e nibe?
+[05:14, 16/07/2026] Sanjoy: Like আইজ্জু আবহাওয়া খামন
+এই টাইপ নাকি ওদের এলফাবেট এ
+[05:14, 16/07/2026] Isfahan: Input kmmne
+Bangla text e nibe?
+Input prolly oder lingo te neya lagte pare....I mean, its a ChittyLLM ffs
+[05:14, 16/07/2026] Isfahan: Like আইজ্জু আবহাওয়া খামন
+এই টাইপ নাকি ওদের এলফাবেট এ
+Oder alphabet er project ekhn kora onk tough
+[05:15, 16/07/2026] Sanjoy: তাইলে কেম্মে
+[05:17, 16/07/2026] Sanjoy: একটা ওয়ে আছে
+রোমানাইজড
+চাকমার বাংলিশ
+[05:20, 16/07/2026] Isfahan: একটা ওয়ে আছে
+রোমানাইজড
+চাকমার বাংলিশ
+হ স্যাডলি, বাট হ
+[05:20, 16/07/2026] Isfahan: শোন, স্টার্ট সবসময় কাচা-ই হয়
+[05:20, 16/07/2026] Isfahan: এইডারে পিইক-এ নিবোনে
+[05:20, 16/07/2026] Isfahan: টপিক বানাইসস?
+[05:21, 16/07/2026] Sanjoy: অনলি চাকমা?
+[05:21, 16/07/2026] Sanjoy: এটা ফিক্স কর
+[05:21, 16/07/2026] Sanjoy: মিনিমাম ১০ হাজার সেন্টেন্স লাগবে
+[05:21, 16/07/2026] Isfahan: অনলি চাকমা?
+ডিপেন্ডস, ডেটা বেশি পাবো কার?
+[05:21, 16/07/2026] Sanjoy: ডিপেন্ডস, ডেটা বেশি পাবো কার?
+idea nai
+[05:29, 16/07/2026] Sanjoy: 1. Indo-Aryan (Best choice for LLM)
+The dominant family — covers the most speakers and dialects:
+
+Dialect/Language	Region
+Standard Bengali (Bangla)	Bangladesh, West Bengal
+Sylheti	Sylhet division, Assam
+Chittagonian	Chittagong division
+Noakhali dialect	Noakhali, Comilla
+Rajshahi dialect	Northwest Bangladesh
+Barishal dialect	Southern Bangladesh
+Rangpuri / Rajbangshi	North Bengal, Rangpur
+Mymensingh dialect	Central-north Bangladesh
+Assamese	Assam (closely related to Bengali)
+All share Bengali script — huge advantage for training data consistency.
+
+2. Tibeto-Burman (Niche / minority)
+Kokborok (Tripura), Chakma, Marma, Tanchangya — spoken in Chittagong Hill Tracts and Tripura
+Very low-resource, limited digital text
+3. Austroasiatic (Very low-resource)
+Santali, Mundari — West Bengal / Jharkhand border
+Olchiki script, very limited data
+[05:30, 16/07/2026] Sanjoy: tibeto burman
+but data pabi kina eta sure howa must
+[05:37, 16/07/2026] Isfahan: tibeto burman
+but data pabi kina eta sure howa must
+Ho
+[07:58, 16/07/2026] Alvee Ahnaf: chakma
+[07:58, 16/07/2026] Alvee Ahnaf: textbook gula nai?
+[07:58, 16/07/2026] Alvee Ahnaf: https://nctb.gov.bd/pages/static-pages/6922dd41933eb65569e1426f
+
+[05:31, 16/07/2026] Sanjoy: 1. Indo-Aryan (Best choice for LLM)
+The dominant family — covers the most speakers and dialects:
+
+Dialect/Language	Region
+Standard Bengali (Bangla)	Bangladesh, West Bengal
+Sylheti	Sylhet division, Assam
+Chittagonian	Chittagong division
+Noakhali dialect	Noakhali, Comilla
+Rajshahi dialect	Northwest Bangladesh
+Barishal dialect	Southern Bangladesh
+Rangpuri / Rajbangshi	North Bengal, Rangpur
+Mymensingh dialect	Central-north Bangladesh
+Assamese	Assam (closely related to Bengali)
+All share Bengali script — huge advantage for training data consistency.
+
+2. Tibeto-Burman (Niche / minority)
+Kokborok (Tripura), Chakma, Marma, Tanchangya — spoken in Chittagong Hill Tracts and Tripura
+Very low-resource, limited digital text
+3. Austroasiatic (Very low-resource)
+Santali, Mundari — West Bengal / Jharkhand border
+Olchiki script, very limited data
+[05:36, 16/07/2026] Isfahan: Indo-Aryan exists. TigerLLM - with 32B parameters.
+[05:36, 16/07/2026] Isfahan: Oitar accuracyr dhare kase diyeo amra jete parbo na
+[05:37, 16/07/2026] Sanjoy: Tibeto-Burman Languages Within Bangladesh
+Language	District	Speakers	Script	LLM Work
+Chakma	Rangamati, Khagrachhari	~500K	Chakma (Unicode)	Near zero
+Marma	Bandarban, Rangamati	~200K	Burmese script	Zero
+Tripuri	Khagrachhari	~80K	Bengali/Koloma	Zero
+Tanchangya	Rangamati	~30K	Chakma-related	Zero
+Mro / Murung	Bandarban	~60K	Mru script (unique)	Zero
+Bawm	Bandarban	~15K	Latin	Zero
+Khumi	Bandarban	~10K	Latin	Zero
+Khyang	Bandarban	~5K	Latin	Zero
+Chak	Bandarban	~3K	Latin	Zero
+Pankho	Bandarban	~2K	Latin	Zero
+[05:37, 16/07/2026] Isfahan: Myanmar er linguistic data r ctg er moddhe crossing korlam?
+[05:37, 16/07/2026] Isfahan: Data barlo tokhon?
+[05:38, 16/07/2026] Sanjoy: Not safe
+Chng hoy
+[05:38, 16/07/2026] Isfahan: Not safe
+Chng hoy
+Ok
+[05:38, 16/07/2026] Sanjoy: As amra language bujhina oder
+[05:38, 16/07/2026] Isfahan: As amra language bujhina oder
+True, true.
+[05:52, 16/07/2026] Sanjoy: Sounds weird
+But stilll
+Buddhist philosophy sbcye beshi explained rn in marma language
+[05:53, 16/07/2026] Sanjoy: Ekta yt channel paisi
+Valoi pecal ache
+100 tar mto vdo 
+Marma y
+[06:01, 16/07/2026] Sanjoy: Why Marma Specifically Holds Unique Knowledge
+
+Pali (original Buddhist texts)
+    ↓
+Burmese interpretations & commentaries
+    ↓
+Marma/Arakanese oral + written tradition  ← unique local layer
+    ↓
+Monastery teachings, specific philosophical lineages
+    ↓
+NEVER translated to English → NOT in any LLM training data

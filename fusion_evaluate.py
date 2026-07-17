@@ -32,7 +32,8 @@ OUR_FEATURES = ["context_containment", "novel_char_ratio", "word_entropy", "char
                 "cultural_default_flag", "resp_is_refusal", "resp_code_switch_ratio",
                 "resp_repetition_score", "resp_is_question",
                 "nli_summac_soft_en", "cross_lingual_disagreement"]
-ALL_FEATURES = HIS_FEATURES + OUR_FEATURES
+MATCHER_FEATURES = ["gt_match_score", "gt_agreement", "gt_matched"]
+ALL_FEATURES = HIS_FEATURES + OUR_FEATURES + MATCHER_FEATURES
 
 y = train["label"].values
 RANDOM_STATE = 42
@@ -83,12 +84,20 @@ def evaluate(feature_cols, model_kind, name):
     return oof, avg_threshold, hallu_at_avg_t
 
 
-print(f"n={len(train)}, his_features={len(HIS_FEATURES)}, our_features={len(OUR_FEATURES)}, combined={len(ALL_FEATURES)}")
+FEATURE_SETS = {
+    "his features alone": HIS_FEATURES,
+    "our features alone": OUR_FEATURES,
+    "matcher alone": MATCHER_FEATURES,
+    "his + matcher": HIS_FEATURES + MATCHER_FEATURES,
+    "our + matcher": OUR_FEATURES + MATCHER_FEATURES,
+    "combined (fusion)": ALL_FEATURES,
+}
+
+print(f"n={len(train)}, his_features={len(HIS_FEATURES)}, our_features={len(OUR_FEATURES)}, "
+      f"matcher_features={len(MATCHER_FEATURES)}, combined={len(ALL_FEATURES)}")
 print()
 results = {}
-for feat_name, feat_cols in [("his features alone", HIS_FEATURES),
-                              ("our features alone", OUR_FEATURES),
-                              ("combined (fusion)", ALL_FEATURES)]:
+for feat_name, feat_cols in FEATURE_SETS.items():
     for model_kind in ["gnb", "logreg", "xgb"]:
         key = f"{feat_name} + {model_kind}"
         results[key] = evaluate(feat_cols, model_kind, key)
@@ -97,9 +106,8 @@ best_key = max(results, key=lambda k: results[k][2])
 print(f"\nBest by OOF hallu_F1: {best_key}  ({results[best_key][2]:.4f})")
 
 # ---- train the winning config on full data, predict test, write submission ----
-feat_name, model_kind = best_key.split(" + ")
-feat_cols = {"his features alone": HIS_FEATURES, "our features alone": OUR_FEATURES,
-             "combined (fusion)": ALL_FEATURES}[feat_name]
+feat_name, model_kind = best_key.rsplit(" + ", 1)
+feat_cols = FEATURE_SETS[feat_name]
 _, threshold, _ = results[best_key]
 
 X_full = train[feat_cols].values
@@ -118,16 +126,28 @@ submission.to_csv("submission_fusion.csv", index=False)
 print(f"\nWrote submission_fusion.csv | threshold={threshold:.2f} | "
       f"balance (1=faithful): {submission['label'].value_counts(normalize=True).round(3).to_dict()}")
 
-# also always write a pure-his-features submission as a safe fallback / comparison point
-his_oof, his_thr, his_f1 = results["his features alone + gnb"]
-model_h, scale_h = get_model("gnb")
-X_full_h = train[HIS_FEATURES].values
-X_test_h = test[HIS_FEATURES].values
-if scale_h:
-    sc = StandardScaler()
-    X_full_h = sc.fit_transform(X_full_h)
-    X_test_h = sc.transform(X_test_h)
-model_h.fit(X_full_h, y)
-preds_h = (model_h.predict_proba(X_test_h)[:, 1] >= his_thr).astype(int)
-pd.DataFrame({"id": test["id"].values, "label": preds_h}).to_csv("submission_his_gnb_baseline.csv", index=False)
-print("Also wrote submission_his_gnb_baseline.csv as a fallback comparison point.")
+# also always write two fixed reference submissions -- not OOF-picked, so they don't
+# inherit the OOF model-selection unreliability the real leaderboard already exposed once
+# (see CLAUDE.md Leaderboard Status: OOF picked logreg over gnb, reality inverted it):
+#   1. pure his-features + gnb -- our real-world best so far (0.717 Kaggle-confirmed)
+#   2. his-features + matcher + gnb -- same reliable base, with the new ground-truth-source
+#      matcher signal (NCTB-QA + TyDi QA) added, still avoiding OUR_FEATURES' binary rule
+#      flags that are what caused GNB to collapse to 0.07-0.12 hallu_F1 earlier
+def write_fixed_submission(feat_cols, model_kind, filename, label):
+    oof, thr, f1 = results[f"{[k for k, v in FEATURE_SETS.items() if v == feat_cols][0]} + {model_kind}"]
+    model, scale = get_model(model_kind)
+    X_full = train[feat_cols].values
+    X_test = test[feat_cols].values
+    if scale:
+        sc = StandardScaler()
+        X_full = sc.fit_transform(X_full)
+        X_test = sc.transform(X_test)
+    model.fit(X_full, y)
+    preds = (model.predict_proba(X_test)[:, 1] >= thr).astype(int)
+    pd.DataFrame({"id": test["id"].values, "label": preds}).to_csv(filename, index=False)
+    print(f"Wrote {filename} ({label}) | OOF hallu_F1={f1:.4f} | threshold={thr:.2f}")
+
+write_fixed_submission(HIS_FEATURES, "gnb", "submission_his_gnb_baseline.csv",
+                        "his features alone + gnb, our real-world-best reference (0.717)")
+write_fixed_submission(HIS_FEATURES + MATCHER_FEATURES, "gnb", "submission_his_matcher_gnb.csv",
+                        "his features + ground-truth matcher + gnb")

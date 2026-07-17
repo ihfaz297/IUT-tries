@@ -37,6 +37,7 @@ warnings.filterwarnings("ignore")
 # Local modules (already Phase-2-compliant, no internet needed)
 from joggota_core import extract_joggota_features
 from submission_pipeline import Translator, TRANSLATOR_CHECKPOINTS
+from ground_truth_matcher import GroundTruthMatcher, compute_gt_features
 
 # ----------------------------------------------------------------------
 # 0. CONFIG
@@ -553,6 +554,21 @@ def run_lexical_rule_features(train_df, test_df):
 
 
 # ----------------------------------------------------------------------
+# LANE 4: ground-truth-source matcher (NCTB-QA + TyDi QA gold-passage, see
+# ground_truth_matcher.py / CLAUDE.md "Ground-Truth Source Expansion"). CPU-only,
+# no GPU needed -- safe to run alongside any other lane.
+# ----------------------------------------------------------------------
+def run_ground_truth_matcher(train_df, test_df):
+    print("Matching against NCTB-QA + TyDi QA ground-truth sources...")
+    matcher = GroundTruthMatcher()
+    train_df, _ = compute_gt_features(train_df, matcher)
+    test_df, _ = compute_gt_features(test_df, matcher)
+    print(f"  train matched: {int(train_df['gt_matched'].sum())}/{len(train_df)} | "
+          f"test matched: {int(test_df['gt_matched'].sum())}/{len(test_df)}")
+    return train_df, test_df
+
+
+# ----------------------------------------------------------------------
 # 7. RUN EVERYTHING
 # ----------------------------------------------------------------------
 print("\n=== Lane 1a: SummaC windowed NLI (native, all rows -- context or prompt) ===")
@@ -573,6 +589,9 @@ print("\n=== Lane 1c: gemma-4 bilingual judge ===")
 
 print("\n=== Lane 3: lexical + deterministic-rule features (genuinely ours, no overlap with his) ===")
 train, test = run_lexical_rule_features(train, test)
+
+print("\n=== Lane 4: ground-truth-source matcher (NCTB-QA + TyDi QA) ===")
+train, test = run_ground_truth_matcher(train, test)
 
 # assemble combined feature frame
 def assemble(df, pA, pB, nli_native, math_arr):
@@ -597,7 +616,8 @@ OUR_FEATURES = ["context_containment", "novel_char_ratio", "word_entropy", "char
                 "cultural_default_flag", "resp_is_refusal", "resp_code_switch_ratio",
                 "resp_repetition_score", "resp_is_question",
                 "nli_summac_soft_en", "cross_lingual_disagreement"]
-ALL_FEATURES = HIS_FEATURES + OUR_FEATURES
+MATCHER_FEATURES = ["gt_match_score", "gt_agreement", "gt_matched"]
+ALL_FEATURES = HIS_FEATURES + OUR_FEATURES + MATCHER_FEATURES
 
 train[ALL_FEATURES] = train[ALL_FEATURES].fillna(0)
 test[ALL_FEATURES] = test[ALL_FEATURES].fillna(0)
@@ -605,4 +625,5 @@ test[ALL_FEATURES] = test[ALL_FEATURES].fillna(0)
 train.to_pickle("fusion_train_features.pkl")
 test.to_pickle("fusion_test_features.pkl")
 print("\nFeature assembly complete. Saved fusion_train_features.pkl / fusion_test_features.pkl")
-print(f"his features: {len(HIS_FEATURES)} | our features: {len(OUR_FEATURES)} | combined: {len(ALL_FEATURES)}")
+print(f"his features: {len(HIS_FEATURES)} | our features: {len(OUR_FEATURES)} | "
+      f"matcher features: {len(MATCHER_FEATURES)} | combined: {len(ALL_FEATURES)}")
